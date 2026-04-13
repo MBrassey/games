@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import AmbientAudio from "./AmbientAudio";
+import Link from "next/link";
+import { sound } from "@/lib/sound";
+import Avatar, { colorForHandle } from "./Avatar";
 
 type Msg = {
   id: string;
@@ -14,33 +16,9 @@ type Msg = {
   kind?: string;
 };
 
-// Deterministic color per user handle, from a curated bash/syntax-highlighter
-// palette. Keeps the chat scannable — each speaker reads as their own color.
-const USER_COLORS = [
-  "#66e0ff", // cyan
-  "#8a4fff", // eldritch purple
-  "#33ff66", // matrix green
-  "#ffb347", // amber
-  "#ff6bd6", // hot magenta
-  "#ffe066", // yellow
-  "#ff8c5a", // orange
-  "#a0ff9a", // lime
-  "#5ad1ff", // sky
-  "#ff5c8a", // pink
-  "#b28dff", // lavender
-  "#6cffd0", // teal
-];
-function hashHandle(h: string): number {
-  let x = 2166136261 >>> 0;
-  for (let i = 0; i < h.length; i++) {
-    x ^= h.charCodeAt(i);
-    x = Math.imul(x, 16777619) >>> 0;
-  }
-  return x;
-}
-function colorFor(handle: string): string {
-  return USER_COLORS[hashHandle(handle) % USER_COLORS.length];
-}
+// Per-user accent (rounded-square avatar border, handle color, etc.) comes
+// from Avatar.colorForHandle so it stays consistent across the portal.
+const colorFor = colorForHandle;
 
 // Lightweight syntax highlighter for chat bodies. Colors:
 //   - `inline code`            → amber/orange (like bash strings)
@@ -136,6 +114,10 @@ export default function ChatDrawer({
         const m = JSON.parse((evt as MessageEvent).data) as Msg;
         setMessages((prev) => {
           if (prev.some((p) => p.id === m.id)) return prev;
+          // Ping on every fresh live message — own and others. Backfilled
+          // history on (re)connect is older than ~5s and stays silent.
+          const age = Date.now() - m.ts;
+          if (age < 5000) sound.notify();
           return [...prev, m]
             .sort((a, b) => a.ts - b.ts)
             .slice(-200);
@@ -161,6 +143,8 @@ export default function ChatDrawer({
     if (!body || sending) return;
     setSending(true);
     setInput("");
+    // No local ping here — the SSE echo-back will fire notify when the
+    // message actually lands, which doubles as the "sent" confirmation.
     try {
       await fetch("/api/chat/send", {
         method: "POST",
@@ -177,7 +161,7 @@ export default function ChatDrawer({
   return (
     <aside
       id="chat"
-      className={`fixed right-0 top-14 z-30 flex h-[calc(100vh-3.5rem)] flex-col border-l border-eldritch-deep/60 bg-void-0/90 backdrop-blur transition-all ${
+      className={`fixed right-0 top-14 z-30 flex h-[calc(100vh-3.5rem)] flex-col border-l border-eldritch-deep/60 bg-void-0/45 backdrop-blur-[2px] transition-all ${
         open ? "w-[380px]" : "w-10"
       }`}
     >
@@ -205,37 +189,34 @@ export default function ChatDrawer({
 
       {open && (
         <>
-          <div className="flex items-center justify-between gap-2 border-b border-eldritch-deep/40 px-3 py-2">
-            <div className="flex gap-1">
-              {channels.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => setChannel(c.id)}
-                  className={`px-2 py-1 text-[0.7rem] uppercase tracking-[0.2em] transition-colors ${
-                    channel === c.id
-                      ? "text-abyss-cyan border-b border-abyss-cyan glow-cyan"
-                      : "text-bone/60 hover:text-bone"
-                  }`}
-                >
-                  {c.label}
-                </button>
-              ))}
-            </div>
-            <AmbientAudio />
+          <div className="flex items-center gap-1 border-b border-eldritch-deep/40 px-3 py-2">
+            {channels.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => setChannel(c.id)}
+                className={`px-2 py-1 text-[0.7rem] uppercase tracking-[0.2em] transition-colors ${
+                  channel === c.id
+                    ? "text-abyss-cyan border-b border-abyss-cyan glow-cyan"
+                    : "text-bone/60 hover:text-bone"
+                }`}
+              >
+                {c.label}
+              </button>
+            ))}
           </div>
 
-          <div ref={listRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 text-sm">
+          <div ref={listRef} className="flex-1 overflow-y-auto py-1 text-sm scrollbar-slim">
             {!signedIn && (
-              <p className="text-bone/60 text-xs">Authenticate to join the uplink.</p>
+              <p className="text-bone/60 text-xs px-3 py-3">Authenticate to join the uplink.</p>
             )}
             {signedIn && visible.length === 0 && (
-              <p className="text-bone/50 text-xs">
+              <p className="text-bone/50 text-xs px-3 py-3">
                 <span className="text-eldritch-purple">» </span>
                 the channel is quiet. say hello.
               </p>
             )}
-            {visible.map((m) => (
-              <Line key={m.id} m={m} isMe={m.handle === meHandle} />
+            {visible.map((m, i) => (
+              <Line key={m.id} m={m} isMe={m.handle === meHandle} zebra={i % 2 === 0} />
             ))}
           </div>
 
@@ -276,27 +257,41 @@ export default function ChatDrawer({
   );
 }
 
-function Line({ m, isMe }: { m: Msg; isMe: boolean }) {
+function Line({ m, isMe, zebra }: { m: Msg; isMe: boolean; zebra: boolean }) {
   const t = new Date(m.ts);
   const hh = t.getHours().toString().padStart(2, "0");
   const mm = t.getMinutes().toString().padStart(2, "0");
   const ss = t.getSeconds().toString().padStart(2, "0");
   const userColor = colorFor(m.handle);
+  const profileHref = `/u/${encodeURIComponent(m.handle)}`;
   return (
-    <div className="group font-mono text-[0.85rem] leading-snug">
-      <span className="text-bone/40">[{hh}:{mm}:{ss}]</span>{" "}
-      <span
-        className="font-semibold"
-        style={{
-          color: userColor,
-          textShadow: `0 0 6px ${userColor}66`,
-        }}
-      >
-        {m.handle}
-        {isMe && <span className="text-bone/40 font-normal"> (you)</span>}
-      </span>
-      <span className="text-eldritch-purple">:</span>{" "}
-      <span className="break-words">{renderBody(m.body)}</span>
+    <div
+      className={`group relative flex items-start gap-2.5 px-3 py-1.5 font-mono text-[0.85rem] leading-snug transition-colors hover:bg-eldritch-purple/5 ${
+        zebra ? "bg-eldritch-deep/10" : "bg-transparent"
+      }`}
+    >
+      <Link href={profileHref} aria-label={`View ${m.handle}'s profile`} className="mt-0.5 shrink-0">
+        <Avatar src={m.avatar} handle={m.handle} size={30} radius={7} />
+      </Link>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <Link
+            href={profileHref}
+            className="font-semibold tracking-wide text-[0.82rem] hover:underline decoration-dotted underline-offset-2"
+            style={{
+              color: userColor,
+              textShadow: `0 0 6px ${userColor}55`,
+            }}
+          >
+            {m.handle}
+          </Link>
+          {isMe && <span className="text-bone/35 text-[0.6rem] uppercase tracking-widest">you</span>}
+          <span className="ml-auto text-bone/30 text-[0.6rem] tabular-nums">
+            {hh}:{mm}:{ss}
+          </span>
+        </div>
+        <div className="break-words mt-0.5 text-bone/90">{renderBody(m.body)}</div>
+      </div>
     </div>
   );
 }

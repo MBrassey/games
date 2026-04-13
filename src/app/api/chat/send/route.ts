@@ -17,12 +17,13 @@ export async function POST(req: Request) {
   const b = SendBody.parse(await req.json());
 
   const profile = (
-    await q<{ handle: string }>(
-      "SELECT handle FROM user_profiles WHERE user_id=$1",
+    await q<{ handle: string | null; avatar_url: string | null }>(
+      "SELECT handle, avatar_url FROM user_profiles WHERE user_id=$1",
       [Number(session.user.id)]
     )
   )[0];
-  const handle = profile?.handle ?? (session.user.name ?? "anon");
+  const handle = profile?.handle ?? session.user.name ?? "anon";
+  const avatar = profile?.avatar_url ?? session.user.image ?? null;
 
   const rows = await q<{ id: string; created_at: Date }>(
     `INSERT INTO chat_messages(channel, user_id, body) VALUES($1,$2,$3)
@@ -34,7 +35,7 @@ export async function POST(req: Request) {
     channel: b.channel,
     userId: String(Number(session.user.id)),
     handle,
-    avatar: session.user.image ?? null,
+    avatar,
     body: b.body,
     ts: new Date(rows[0].created_at).getTime(),
     kind: "chat",

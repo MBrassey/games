@@ -24,7 +24,21 @@
   <style>
     html, body { margin: 0; padding: 0; background: #030208; height: 100%; overflow: hidden; }
     body { display: flex; align-items: center; justify-content: center; color: #8a4fff; font-family: ui-monospace, monospace; }
-    #canvas { display: block; outline: none; max-width: 100%; max-height: 100vh; image-rendering: pixelated; }
+    /* Explicit `visibility: visible !important` overrides theme/love.css's
+       default `#canvas { visibility: hidden; }`. Without this the canvas
+       renders but stays invisible — the classic "everything looks fine but
+       screen is black" love.js trap.
+       image-rendering: auto gives smooth scaling for vector fonts at
+       non-integer ratios; `pixelated` was blurring the text. */
+    #canvas {
+      display: block;
+      outline: none;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      image-rendering: auto;
+      visibility: visible !important;
+    }
     #loadingCanvas { display: none; }
     #boot { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; font-size: 11px; letter-spacing: 0.3em; text-transform: uppercase; color: #66e0ff; text-shadow: 0 0 8px #66e0ff66; }
     footer { display: none; }
@@ -99,8 +113,15 @@
       })(),
       setStatus: function(text) {
         const boot = document.getElementById("boot");
-        if (text) { if (boot) boot.textContent = text; }
-        else if (Module.remainingDependencies === 0) { if (boot) boot.style.display = "none"; }
+        if (text) {
+          if (boot) boot.textContent = text;
+        } else if (Module.remainingDependencies === 0) {
+          if (boot) boot.style.display = "none";
+          // Belt-and-suspenders: also force canvas visible, since some
+          // themed CSS hides it by default until this hook fires.
+          const c = document.getElementById("canvas");
+          if (c) { c.style.visibility = "visible"; c.style.display = "block"; }
+        }
       },
       totalDependencies: 0,
       remainingDependencies: 0,

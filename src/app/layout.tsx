@@ -1,5 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import RouteSfx from "@/components/RouteSfx";
+import SoundBoot from "@/components/SoundBoot";
+import BackgroundFX from "@/components/BackgroundFX";
 
 export const metadata: Metadata = {
   title: "GAMES // brassey.io",
@@ -25,7 +28,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className="min-h-screen">
-        {children}
+        <BackgroundFX />
+        <SoundBoot />
+        <RouteSfx />
+        <div className="relative z-10">{children}</div>
       </body>
     </html>
   );

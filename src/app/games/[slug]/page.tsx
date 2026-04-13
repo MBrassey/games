@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getGame } from "@/lib/games";
+import { getGame, runtimePath } from "@/lib/games";
 import { auth } from "@/lib/auth";
 import TopBar from "@/components/TopBar";
 import ChatDrawer from "@/components/ChatDrawer";
@@ -23,22 +23,24 @@ export default async function GamePage({
         meHandle={session?.user?.name ?? null}
         gameSlug={slug}
       />
-      <main className="pr-0 md:pr-[360px]">
-        <div className="mx-auto max-w-7xl px-6 py-6">
-          <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
-            <div>
-              <div className="stamp" style={{ color: game.accentColor }}>now running :: {game.codename}</div>
-              <h1 className="text-2xl tracking-[0.2em] uppercase text-bone mt-1">{game.title}</h1>
-              <p className="text-sm text-bone/60 mt-1 max-w-2xl">{game.description}</p>
+      <main className="pr-0 md:pr-[380px]">
+        {/* Game page uses the full width of the main column (no max-w cap)
+            so the love.js canvas can render at its native 1280×720 or
+            bigger without fractional CSS downscale blurring the text. */}
+        <div className="px-4 md:px-6 py-3">
+          {/* Condensed title bar so more vertical goes to the game frame. */}
+          <div className="flex flex-wrap items-baseline justify-between gap-3 mb-2">
+            <div className="flex items-baseline gap-3">
+              <div className="stamp" style={{ color: game.accentColor }}>▸ {game.codename}</div>
+              <h1 className="text-sm tracking-[0.25em] uppercase text-bone">{game.title}</h1>
             </div>
-            <div className="flex items-center gap-3 text-[0.65rem] uppercase tracking-[0.25em] text-bone/50">
+            <div className="flex items-center gap-3 text-[0.62rem] uppercase tracking-[0.25em] text-bone/50">
               <span>v{game.version}</span>
               <span>· {game.multiplayer}</span>
               <span>· {game.category}</span>
             </div>
           </div>
-          <hr className="hr-dither mb-4" />
-          <GameRunner slug={game.slug} runtimePath={game.runtimePath} signedIn={!!session?.user?.id} />
+          <GameRunner slug={game.slug} runtimePath={runtimePath(game.slug)} signedIn={!!session?.user?.id} />
         </div>
       </main>
     </>

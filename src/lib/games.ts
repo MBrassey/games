@@ -9,13 +9,26 @@ export type GameEntry = {
   category: "action" | "puzzle" | "rpg" | "arcade" | "meta";
   tags: string[];
   year: number;
-  // Paths relative to /public
-  runtimePath: string; // e.g. /games/claude-mythos/runtime
-  lovePath: string;    // e.g. /games/claude-mythos/game.love
-  accentColor: string; // tailwind-ish hex for accent
+
+  // Source is pulled fresh from GitHub at build time by
+  // scripts/build-games.mjs. Whatever's on the given ref when Vercel
+  // builds is what ships.
+  repo: `${string}/${string}`;      // e.g. "ThePearlKing/claude-mythos-game"
+  ref?: string;                      // branch / tag, default "main"
+  subdir?: string;                   // path to main.lua within the repo, default "."
+
+  accentColor: string;               // hex accent used throughout the portal
   multiplayer: "single" | "coop" | "mmo";
   status: "live" | "beta" | "soon";
 };
+
+// Runtime path is derived — build output always lands at the same shape.
+export function runtimePath(slug: string): string {
+  return `/games/${slug}/runtime`;
+}
+export function lovePath(slug: string): string {
+  return `/games/${slug}/game.love`;
+}
 
 export const GAMES: GameEntry[] = [
   {
@@ -25,13 +38,13 @@ export const GAMES: GameEntry[] = [
     tagline: "An eldritch bullet survivor descent into the void sea.",
     description:
       "A wave-based arcade survivor threaded with eldritch horror. Navigate the void sea, build decks of cosmic powers, and hold the line against the rising tide of the deep.",
-    author: "matt",
-    version: "0.9.0",
+    author: "ThePearlKing",
+    version: "head",
     category: "action",
     tags: ["bullet-hell", "roguelite", "eldritch", "cards"],
     year: 2026,
-    runtimePath: "/games/claude-mythos/runtime",
-    lovePath: "/games/claude-mythos/game.love",
+    repo: "ThePearlKing/claude-mythos-game",
+    ref: "main",
     accentColor: "#8a4fff",
     multiplayer: "single",
     status: "live",
