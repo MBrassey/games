@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "pnpm build",
+  "installCommand": "pnpm install",
+  "functions": {
+    "src/app/api/chat/stream/route.ts": { "maxDuration": 300 }
+  },
+  "regions": ["iad1"]
+}

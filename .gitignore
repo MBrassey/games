@@ -1,0 +1,13 @@
+node_modules
+.next
+.vercel
+.env
+.env.local
+.env*.local
+*.tsbuildinfo
+next-env.d.ts
+dist
+.DS_Store
+# Compiled love.js runtimes ARE committed so Vercel deploys ship them.
+# (Build once locally with: pnpm build:claude-mythos — then commit the
+# resulting public/games/<slug>/runtime/ directory.)

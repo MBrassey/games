@@ -1,0 +1,200 @@
+<!--
+  Runtime shell for LÖVE2D games compiled with love.js.
+  Committed into the repo; sibling files (love.js, love.wasm, game.js, game.data,
+  theme/) are produced by scripts/build-claude-mythos.sh and checked in with
+  the build artifact.
+
+  Exchange protocol with the parent GameRunner:
+    parent → runtime:
+      { type: "loveweb:auth",            signedIn }
+      { type: "loveweb:saves:manifest",  files: [{path, updated_at}] }
+      { type: "loveweb:save:data",       reqId, dataB64 | null }
+    runtime → parent:
+      { type: "loveweb:ready",           game }
+      { type: "loveweb:save:write",      path, dataB64, meta }
+      { type: "loveweb:save:read",       path, reqId }
+      { type: "loveweb:log",             level, msg }
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>LÖVE runtime</title>
+  <link rel="stylesheet" type="text/css" href="theme/love.css" />
+  <style>
+    html, body { margin: 0; padding: 0; background: #030208; height: 100%; overflow: hidden; }
+    body { display: flex; align-items: center; justify-content: center; color: #8a4fff; font-family: ui-monospace, monospace; }
+    #canvas { display: block; outline: none; max-width: 100%; max-height: 100vh; image-rendering: pixelated; }
+    #loadingCanvas { display: none; }
+    #boot { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; font-size: 11px; letter-spacing: 0.3em; text-transform: uppercase; color: #66e0ff; text-shadow: 0 0 8px #66e0ff66; }
+    footer { display: none; }
+  </style>
+</head>
+<body>
+  <div id="boot">compiling kernel<span id="boot-dots">...</span></div>
+  <canvas id="loadingCanvas" width="800" height="600"></canvas>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+
+  <script>
+    // --- bridge state ---
+    const SLUG = new URLSearchParams(location.search).get("slug") || "claude-mythos";
+    // love.js default save dir (emscripten): /home/web_user/.local/share/LOVE/<identity>/
+    // Identity comes from conf.lua (t.identity). We scan this root for any writes.
+    const SAVE_ROOT = "/home/web_user/.local/share/LOVE";
+
+    let manifestResolve;
+    const manifestPromise = new Promise((res) => { manifestResolve = res; });
+    const pendingReads = new Map();
+
+    window.addEventListener("message", (ev) => {
+      const d = ev.data;
+      if (!d || typeof d !== "object") return;
+      if (d.type === "loveweb:saves:manifest") manifestResolve(d.files || []);
+      if (d.type === "loveweb:save:data" && d.reqId && pendingReads.has(d.reqId)) {
+        const r = pendingReads.get(d.reqId); pendingReads.delete(d.reqId); r(d.dataB64);
+      }
+    });
+    function requestRemoteRead(path) {
+      const reqId = Math.random().toString(36).slice(2);
+      return new Promise((res) => {
+        pendingReads.set(reqId, res);
+        parent.postMessage({ type: "loveweb:save:read", path, reqId }, "*");
+        setTimeout(() => { if (pendingReads.has(reqId)) { pendingReads.delete(reqId); res(null); } }, 5000);
+      });
+    }
+    function b64ToBytes(b64) {
+      const bin = atob(b64); const u = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+      return u;
+    }
+    function bytesToB64(u8) {
+      let s = ""; const CH = 0x8000;
+      for (let i = 0; i < u8.length; i += CH) s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+      return btoa(s);
+    }
+    function log(level, msg) { parent.postMessage({ type: "loveweb:log", level, msg: String(msg) }, "*"); }
+
+    function goFullScreen() {
+      const c = document.getElementById("canvas");
+      (c.requestFullScreen || c.webkitRequestFullScreen || c.mozRequestFullScreen || function(){}).call(c);
+    }
+    window.onload = () => window.focus();
+    window.onclick = () => window.focus();
+    window.addEventListener("keydown", (e) => {
+      if ([32, 37, 38, 39, 40].indexOf(e.keyCode) > -1) e.preventDefault();
+    }, false);
+
+    const Module = {
+      arguments: ["./game.love"],
+      INITIAL_MEMORY: 33554432,
+      printErr: (t) => log("error", t),
+      print: (t) => log("info", t),
+      canvas: (function(){
+        const c = document.getElementById("canvas");
+        c.addEventListener("webglcontextlost", (e) => { log("error", "webgl lost"); e.preventDefault(); }, false);
+        return c;
+      })(),
+      setStatus: function(text) {
+        const boot = document.getElementById("boot");
+        if (text) { if (boot) boot.textContent = text; }
+        else if (Module.remainingDependencies === 0) { if (boot) boot.style.display = "none"; }
+      },
+      totalDependencies: 0,
+      remainingDependencies: 0,
+      monitorRunDependencies: function(left) {
+        this.remainingDependencies = left;
+        this.totalDependencies = Math.max(this.totalDependencies, left);
+        Module.setStatus(left ? ("preparing " + (this.totalDependencies-left) + "/" + this.totalDependencies) : "");
+      },
+      preRun: [
+        function prePopulate() {
+          Module.addRunDependency("loveweb-saves");
+          (async () => {
+            try {
+              const files = await Promise.race([
+                manifestPromise,
+                new Promise((res) => setTimeout(() => res([]), 4000)),
+              ]);
+              for (const f of files) {
+                const b64 = await requestRemoteRead(f.path);
+                if (!b64) continue;
+                const bytes = b64ToBytes(b64);
+                const full = SAVE_ROOT + "/" + f.path.replace(/^\//, "");
+                const dir = full.substring(0, full.lastIndexOf("/"));
+                try { FS.mkdirTree(dir); } catch {}
+                try { FS.writeFile(full, bytes); } catch (e) { log("warn", "write " + full + ": " + e); }
+              }
+              log("info", "prepopulated " + files.length + " save file(s)");
+            } catch (e) { log("warn", "prepopulate: " + e); }
+            finally { Module.removeRunDependency("loveweb-saves"); }
+          })();
+        },
+      ],
+      postRun: [
+        function startSyncLoop() {
+          parent.postMessage({ type: "loveweb:ready", game: SLUG }, "*");
+
+          const mtimes = new Map();
+          function walk(dir, visit) {
+            let entries;
+            try { entries = FS.readdir(dir); } catch { return; }
+            for (const e of entries) {
+              if (e === "." || e === "..") continue;
+              const p = dir + "/" + e;
+              let st; try { st = FS.stat(p); } catch { continue; }
+              if (FS.isDir(st.mode)) walk(p, visit);
+              else visit(p, st);
+            }
+          }
+
+          setInterval(() => {
+            try {
+              try { FS.mkdirTree(SAVE_ROOT); } catch {}
+              walk(SAVE_ROOT, (p, st) => {
+                const mt = +st.mtime;
+                const prev = mtimes.get(p);
+                if (prev === mt) return;
+                mtimes.set(p, mt);
+                if (prev === undefined) return; // first-seen on pre-populate; skip echo
+                try {
+                  const bytes = FS.readFile(p);
+                  const rel = p.replace(SAVE_ROOT + "/", "");
+                  parent.postMessage({
+                    type: "loveweb:save:write",
+                    path: rel,
+                    dataB64: bytesToB64(bytes),
+                    meta: { size: bytes.byteLength, mtime: mt },
+                  }, "*");
+                } catch (e) { log("warn", "flush " + p + ": " + e); }
+              });
+            } catch {}
+          }, 2000);
+
+          window.addEventListener("beforeunload", () => {
+            try {
+              walk(SAVE_ROOT, (p) => {
+                const bytes = FS.readFile(p);
+                const rel = p.replace(SAVE_ROOT + "/", "");
+                parent.postMessage({
+                  type: "loveweb:save:write",
+                  path: rel,
+                  dataB64: bytesToB64(bytes),
+                  meta: { final: true },
+                }, "*");
+              });
+            } catch {}
+          });
+        },
+      ],
+    };
+    Module.setStatus("downloading…");
+    window.onerror = function(){ Module.setStatus("exception: see console"); };
+
+    var applicationLoad = function(){ Love(Module); };
+  </script>
+
+  <!-- love.js emits game.js (assets manifest) + love.js (wasm loader). -->
+  <script type="text/javascript" src="game.js"></script>
+  <script async type="text/javascript" src="love.js" onload="applicationLoad(this)"></script>
+</body>
+</html>
