@@ -37,14 +37,14 @@
 
   <script>
     // --- bridge state ---
-    const SLUG = new URLSearchParams(location.search).get("slug") || "claude-mythos";
+    var SLUG = new URLSearchParams(location.search).get("slug") || "claude-mythos";
     // love.js default save dir (emscripten): /home/web_user/.local/share/LOVE/<identity>/
     // Identity comes from conf.lua (t.identity). We scan this root for any writes.
-    const SAVE_ROOT = "/home/web_user/.local/share/LOVE";
+    var SAVE_ROOT = "/home/web_user/.local/share/LOVE";
 
-    let manifestResolve;
-    const manifestPromise = new Promise((res) => { manifestResolve = res; });
-    const pendingReads = new Map();
+    var manifestResolve;
+    var manifestPromise = new Promise(function (res) { manifestResolve = res; });
+    var pendingReads = new Map();
 
     window.addEventListener("message", (ev) => {
       const d = ev.data;
@@ -84,7 +84,10 @@
       if ([32, 37, 38, 39, 40].indexOf(e.keyCode) > -1) e.preventDefault();
     }, false);
 
-    const Module = {
+    // NB: must be `var` (not `const`/`let`) — love.js's generated game.js
+    // re-declares `Module` with a `var` and merges into this one. Using
+    // `const` here breaks that merge with a SyntaxError.
+    var Module = {
       arguments: ["./game.love"],
       INITIAL_MEMORY: 33554432,
       printErr: (t) => log("error", t),

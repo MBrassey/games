@@ -19,7 +19,7 @@ export async function POST(req: Request) {
   const profile = (
     await q<{ handle: string }>(
       "SELECT handle FROM user_profiles WHERE user_id=$1",
-      [session.user.id]
+      [Number(session.user.id)]
     )
   )[0];
   const handle = profile?.handle ?? (session.user.name ?? "anon");
@@ -27,12 +27,12 @@ export async function POST(req: Request) {
   const rows = await q<{ id: string; created_at: Date }>(
     `INSERT INTO chat_messages(channel, user_id, body) VALUES($1,$2,$3)
      RETURNING id, created_at`,
-    [b.channel, session.user.id, b.body]
+    [b.channel, Number(session.user.id), b.body]
   );
   const msg: ChatMsg = {
     id: String(rows[0].id),
     channel: b.channel,
-    userId: String(session.user.id),
+    userId: String(Number(session.user.id)),
     handle,
     avatar: session.user.image ?? null,
     body: b.body,
@@ -42,9 +42,10 @@ export async function POST(req: Request) {
 
   const kv = getKv();
   if (kv) {
-    // Fan out via KV list that SSE consumers tail. We use a capped list per
-    // channel plus a monotonic counter so clients can resume.
-    await kv.lpush(`stream:${b.channel}`, JSON.stringify(msg));
+    // @vercel/kv auto-JSON-serializes on write and auto-parses on read, so
+    // we push the object directly (passing a pre-stringified string would
+    // still be valid but the stream route below expects the parsed object).
+    await kv.lpush(`stream:${b.channel}`, msg);
     await kv.ltrim(`stream:${b.channel}`, 0, 199);
     await kv.incr(`seq:${b.channel}`);
   }

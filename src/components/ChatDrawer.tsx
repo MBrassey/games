@@ -14,6 +14,87 @@ type Msg = {
   kind?: string;
 };
 
+// Deterministic color per user handle, from a curated bash/syntax-highlighter
+// palette. Keeps the chat scannable — each speaker reads as their own color.
+const USER_COLORS = [
+  "#66e0ff", // cyan
+  "#8a4fff", // eldritch purple
+  "#33ff66", // matrix green
+  "#ffb347", // amber
+  "#ff6bd6", // hot magenta
+  "#ffe066", // yellow
+  "#ff8c5a", // orange
+  "#a0ff9a", // lime
+  "#5ad1ff", // sky
+  "#ff5c8a", // pink
+  "#b28dff", // lavender
+  "#6cffd0", // teal
+];
+function hashHandle(h: string): number {
+  let x = 2166136261 >>> 0;
+  for (let i = 0; i < h.length; i++) {
+    x ^= h.charCodeAt(i);
+    x = Math.imul(x, 16777619) >>> 0;
+  }
+  return x;
+}
+function colorFor(handle: string): string {
+  return USER_COLORS[hashHandle(handle) % USER_COLORS.length];
+}
+
+// Lightweight syntax highlighter for chat bodies. Colors:
+//   - `inline code`            → amber/orange (like bash strings)
+//   - "double-quoted strings"  → green
+//   - URLs                     → cyan, linked
+//   - @mentions                → magenta
+//   - #channels                → yellow
+//   - numbers                  → purple
+//   - /commands                → red
+function renderBody(body: string) {
+  const nodes: React.ReactNode[] = [];
+  // Simple tokenizer: split on a combined regex capturing each category in
+  // its own group, emit styled spans as we go.
+  const re =
+    /(`[^`]+`)|("[^"\n]+")|(https?:\/\/\S+)|(@[A-Za-z0-9_-]+)|(#[A-Za-z0-9_-]+)|(\b\d+(?:\.\d+)?\b)|(^\/[a-zA-Z][\w-]*)/gm;
+  let last = 0;
+  let idx = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body))) {
+    if (m.index > last) {
+      nodes.push(<span key={idx++} className="text-bone/90">{body.slice(last, m.index)}</span>);
+    }
+    const t = m[0];
+    if (m[1]) {
+      nodes.push(
+        <code key={idx++} className="text-amber-signal bg-void-2/60 border border-eldritch-deep/40 px-1 rounded-sm">
+          {t.slice(1, -1)}
+        </code>
+      );
+    } else if (m[2]) {
+      nodes.push(<span key={idx++} className="text-matrix-green glow-green">{t}</span>);
+    } else if (m[3]) {
+      nodes.push(
+        <a key={idx++} href={t} target="_blank" rel="noreferrer" className="text-abyss-cyan glow-cyan underline decoration-dotted underline-offset-2 hover:text-eldritch-purple">
+          {t}
+        </a>
+      );
+    } else if (m[4]) {
+      nodes.push(<span key={idx++} className="text-[#ff6bd6] glow-accent">{t}</span>);
+    } else if (m[5]) {
+      nodes.push(<span key={idx++} className="text-[#ffe066]">{t}</span>);
+    } else if (m[6]) {
+      nodes.push(<span key={idx++} className="text-eldritch-purple">{t}</span>);
+    } else if (m[7]) {
+      nodes.push(<span key={idx++} className="text-blood-red glow-red">{t}</span>);
+    }
+    last = m.index + t.length;
+  }
+  if (last < body.length) {
+    nodes.push(<span key={idx++} className="text-bone/90">{body.slice(last)}</span>);
+  }
+  return nodes;
+}
+
 export default function ChatDrawer({
   signedIn,
   meHandle,
@@ -31,50 +112,49 @@ export default function ChatDrawer({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [reconnectTick, setReconnectTick] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
-  const esRef = useRef<EventSource | null>(null);
 
   const channels = useMemo(() => {
     return gameSlug
-      ? [{ id: "chat:global", label: "#global" }, { id: `chat:game:${gameSlug}`, label: `#${gameSlug}` }]
+      ? [
+          { id: "chat:global", label: "#global" },
+          { id: `chat:game:${gameSlug}`, label: `#${gameSlug}` },
+        ]
       : [{ id: "chat:global", label: "#global" }];
   }, [gameSlug]);
 
-  // Connect SSE
+  const channelIds = channels.map((c) => c.id).join(",");
+
+  // Connect SSE — one stream per set of channels. Auto-reconnects on error.
   useEffect(() => {
     if (!signedIn) return;
-    const es = new EventSource(
-      `/api/chat/stream?channels=${channels.map((c) => c.id).join(",")}`
-    );
-    esRef.current = es;
+    const es = new EventSource(`/api/chat/stream?channels=${channelIds}`);
     es.addEventListener("hello", () => setConnected(true));
     es.addEventListener("chat", (evt) => {
       try {
         const m = JSON.parse((evt as MessageEvent).data) as Msg;
         setMessages((prev) => {
           if (prev.some((p) => p.id === m.id)) return prev;
-          const next = [...prev, m].slice(-200);
-          return next;
+          return [...prev, m]
+            .sort((a, b) => a.ts - b.ts)
+            .slice(-200);
         });
       } catch {}
     });
     es.onerror = () => {
       setConnected(false);
-      // EventSource auto-reconnects; close + reopen after a short delay
       es.close();
-      setTimeout(() => {
-        // trigger effect re-run
-        setChannel((c) => c);
-      }, 2000);
+      const t = setTimeout(() => setReconnectTick((n) => n + 1), 2000);
+      return () => clearTimeout(t);
     };
-    return () => { es.close(); esRef.current = null; };
-  }, [signedIn, channels]);
+    return () => es.close();
+  }, [signedIn, channelIds, reconnectTick]);
 
-  // Autoscroll
   useEffect(() => {
     if (!listRef.current) return;
     listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [messages, open]);
+  }, [messages, open, channel]);
 
   const send = useCallback(async () => {
     const body = input.trim();
@@ -98,21 +178,25 @@ export default function ChatDrawer({
     <aside
       id="chat"
       className={`fixed right-0 top-14 z-30 flex h-[calc(100vh-3.5rem)] flex-col border-l border-eldritch-deep/60 bg-void-0/90 backdrop-blur transition-all ${
-        open ? "w-[360px]" : "w-10"
+        open ? "w-[380px]" : "w-10"
       }`}
     >
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex h-10 w-full items-center justify-between border-b border-eldritch-deep/60 px-3 text-[0.65rem] uppercase tracking-[0.3em] text-bone/60 hover:text-abyss-cyan"
+        className="flex h-10 w-full items-center justify-between border-b border-eldritch-deep/60 px-3 text-[0.65rem] uppercase tracking-[0.3em] text-bone/70 hover:text-abyss-cyan"
         title={open ? "collapse chat" : "expand chat"}
       >
         {open ? (
           <>
             <span>
-              <span className={`mr-2 inline-block h-1.5 w-1.5 rounded-full ${connected ? "bg-matrix-green shadow-[0_0_8px_#33ff66] animate-pulse" : "bg-blood-red"}`} />
-              signal ▸ {connected ? "linked" : "scanning"}
+              <span
+                className={`mr-2 inline-block h-1.5 w-1.5 rounded-full ${
+                  connected ? "bg-matrix-green shadow-[0_0_8px_#33ff66] animate-pulse" : "bg-blood-red"
+                }`}
+              />
+              signal ▸ <span className={connected ? "text-matrix-green" : "text-blood-red"}>{connected ? "linked" : "scanning"}</span>
             </span>
-            <span>⟨</span>
+            <span className="text-eldritch-purple">⟨</span>
           </>
         ) : (
           <span className="rotate-180 [writing-mode:vertical-rl]">chat ▸</span>
@@ -127,10 +211,10 @@ export default function ChatDrawer({
                 <button
                   key={c.id}
                   onClick={() => setChannel(c.id)}
-                  className={`px-2 py-1 text-[0.65rem] uppercase tracking-[0.2em] transition-colors ${
+                  className={`px-2 py-1 text-[0.7rem] uppercase tracking-[0.2em] transition-colors ${
                     channel === c.id
                       ? "text-abyss-cyan border-b border-abyss-cyan glow-cyan"
-                      : "text-bone/50 hover:text-bone"
+                      : "text-bone/60 hover:text-bone"
                   }`}
                 >
                   {c.label}
@@ -140,14 +224,12 @@ export default function ChatDrawer({
             <AmbientAudio />
           </div>
 
-          <div ref={listRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-2 text-sm">
+          <div ref={listRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 text-sm">
             {!signedIn && (
-              <p className="text-bone/40 text-xs">
-                Authenticate to join the uplink.
-              </p>
+              <p className="text-bone/60 text-xs">Authenticate to join the uplink.</p>
             )}
             {signedIn && visible.length === 0 && (
-              <p className="text-bone/40 text-xs">
+              <p className="text-bone/50 text-xs">
                 <span className="text-eldritch-purple">» </span>
                 the channel is quiet. say hello.
               </p>
@@ -160,8 +242,11 @@ export default function ChatDrawer({
           <div className="border-t border-eldritch-deep/60 p-3">
             {signedIn ? (
               <form
-                onSubmit={(e) => { e.preventDefault(); send(); }}
-                className="flex items-center gap-2 border border-eldritch-deep/60 bg-void-1/80 px-2 py-1.5 focus-within:border-eldritch-purple"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  send();
+                }}
+                className="flex items-center gap-2 border border-eldritch-deep/60 bg-void-1/80 px-2 py-1.5 focus-within:border-eldritch-purple focus-within:shadow-[0_0_12px_#8a4fff33]"
               >
                 <span className="text-abyss-cyan text-xs">▸</span>
                 <input
@@ -174,13 +259,13 @@ export default function ChatDrawer({
                 <button
                   type="submit"
                   disabled={!input.trim() || sending}
-                  className="text-[0.65rem] uppercase tracking-[0.2em] text-bone/50 hover:text-abyss-cyan disabled:opacity-30"
+                  className="text-[0.65rem] uppercase tracking-[0.2em] text-bone/60 hover:text-abyss-cyan disabled:opacity-30"
                 >
                   send ↵
                 </button>
               </form>
             ) : (
-              <a href="/api/auth/signin" className="btn cyan w-full justify-center">
+              <a href="/signin" className="btn cyan w-full justify-center">
                 ▸ Authenticate
               </a>
             )}
@@ -196,17 +281,22 @@ function Line({ m, isMe }: { m: Msg; isMe: boolean }) {
   const hh = t.getHours().toString().padStart(2, "0");
   const mm = t.getMinutes().toString().padStart(2, "0");
   const ss = t.getSeconds().toString().padStart(2, "0");
+  const userColor = colorFor(m.handle);
   return (
-    <div className="group">
-      <div className="flex items-baseline gap-2">
-        <span className="text-[0.65rem] text-bone/35">{hh}:{mm}:{ss}</span>
-        <span className={`text-xs tracking-wider ${isMe ? "text-abyss-cyan glow-cyan" : "text-eldritch-purple"}`}>
-          {m.handle}
-        </span>
-      </div>
-      <div className="pl-[3.75rem] -mt-0.5 text-bone/90 text-sm break-words leading-snug">
-        {m.body}
-      </div>
+    <div className="group font-mono text-[0.85rem] leading-snug">
+      <span className="text-bone/40">[{hh}:{mm}:{ss}]</span>{" "}
+      <span
+        className="font-semibold"
+        style={{
+          color: userColor,
+          textShadow: `0 0 6px ${userColor}66`,
+        }}
+      >
+        {m.handle}
+        {isMe && <span className="text-bone/40 font-normal"> (you)</span>}
+      </span>
+      <span className="text-eldritch-purple">:</span>{" "}
+      <span className="break-words">{renderBody(m.body)}</span>
     </div>
   );
 }

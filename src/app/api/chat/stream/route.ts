@@ -4,6 +4,10 @@ import { getKv } from "@/lib/kv";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function safeJson(s: string): unknown | null {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
 // Long-polling style SSE stream. Each client subscribes to one or more
 // channels; the server tails the Redis list for each, emitting new entries
 // as SSE events. Vercel limit: maxDuration is set in vercel.json (300s for
@@ -30,11 +34,18 @@ export async function GET(req: Request) {
         );
       };
 
-      // Initial hello + current seq per channel
+      // Initial hello + current seq per channel. Also backfill the most
+      // recent ~20 messages per channel so the UI has immediate context on
+      // every (re)connect without a separate /history endpoint.
       if (kv) {
         for (const ch of channels) {
           const seq = Number((await kv.get(`seq:${ch}`)) ?? 0);
           seqs.set(ch, seq);
+          const recent = (await kv.lrange(`stream:${ch}`, 0, 19)) as unknown[];
+          for (const raw of recent.reverse()) {
+            const msg = typeof raw === "string" ? safeJson(raw) : raw;
+            if (msg) send("chat", msg);
+          }
         }
       }
       send("hello", { channels, at: Date.now() });
@@ -64,9 +75,12 @@ export async function GET(req: Request) {
             const last = seqs.get(ch) ?? 0;
             if (cur > last) {
               const delta = Math.min(cur - last, 50);
-              const items = (await kv.lrange(`stream:${ch}`, 0, delta - 1)) as string[];
+              // @vercel/kv auto-parses JSON values, so `items` comes back as
+              // an array of already-deserialized objects (not strings).
+              const items = (await kv.lrange(`stream:${ch}`, 0, delta - 1)) as unknown[];
               for (const raw of items.reverse()) {
-                try { send("chat", JSON.parse(raw)); } catch {}
+                const msg = typeof raw === "string" ? safeJson(raw) : raw;
+                if (msg) send("chat", msg);
               }
               seqs.set(ch, cur);
             }

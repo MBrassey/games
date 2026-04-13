@@ -31,10 +31,15 @@ if [ ! -f "$SRC/main.lua" ] || [ ! -f "$SRC/conf.lua" ]; then
   exit 1
 fi
 
-echo "» packing source → game.love"
+echo "» applying web-compat patches (LuaJIT → Lua 5.1)"
+STAGING="$(mktemp -d)/src"
+node "$ROOT/scripts/web-compat-patch.mjs" "$SRC" "$STAGING"
+
+echo "» packing patched source → game.love"
 mkdir -p "$OUT_DIR"
 rm -f "$LOVE_FILE"
-node "$ROOT/scripts/make-love.mjs" "$SRC" "$LOVE_FILE"
+node "$ROOT/scripts/make-love.mjs" "$STAGING" "$LOVE_FILE"
+rm -rf "$(dirname "$STAGING")"
 
 echo "» compiling with love.js (npx)"
 mkdir -p "$RUNTIME_DIR"

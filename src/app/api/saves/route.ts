@@ -24,14 +24,14 @@ export async function GET(req: Request) {
   if (path) {
     const rows = await q<{ data: string; meta: unknown; updated_at: Date }>(
       "SELECT data, meta, updated_at FROM game_saves WHERE user_id=$1 AND game_slug=$2 AND path=$3",
-      [session.user.id, game, path]
+      [Number(session.user.id), game, path]
     );
     if (!rows.length) return NextResponse.json({ error: "not found" }, { status: 404 });
     return NextResponse.json(rows[0]);
   }
   const rows = await q<{ path: string; updated_at: Date; meta: unknown }>(
     "SELECT path, meta, updated_at FROM game_saves WHERE user_id=$1 AND game_slug=$2",
-    [session.user.id, game]
+    [Number(session.user.id), game]
   );
   return NextResponse.json({ files: rows });
 }
@@ -45,7 +45,7 @@ export async function PUT(req: Request) {
      VALUES ($1,$2,$3,$4,$5)
      ON CONFLICT (user_id, game_slug, path)
      DO UPDATE SET data=EXCLUDED.data, meta=EXCLUDED.meta, updated_at=now()`,
-    [session.user.id, body.game, body.path, body.data, body.meta ?? {}]
+    [Number(session.user.id), body.game, body.path, body.data, body.meta ?? {}]
   );
   return NextResponse.json({ ok: true });
 }
@@ -59,7 +59,7 @@ export async function DELETE(req: Request) {
   if (!game || !path) return NextResponse.json({ error: "game & path required" }, { status: 400 });
   await q(
     "DELETE FROM game_saves WHERE user_id=$1 AND game_slug=$2 AND path=$3",
-    [session.user.id, game, path]
+    [Number(session.user.id), game, path]
   );
   return NextResponse.json({ ok: true });
 }

@@ -4,11 +4,12 @@ const nextConfig = {
   async headers() {
     return [
       {
-        // love.js needs SharedArrayBuffer → cross-origin isolation
+        // Game runtimes change on every rebuild. Serving them no-cache keeps
+        // us from chasing stale `game.data` / `love.wasm` in the browser.
+        // (They're ~5 MB; revisit if this becomes a bandwidth issue.)
         source: "/games/:slug/runtime/:path*",
         headers: [
-          { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
-          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
         ],
       },
     ];

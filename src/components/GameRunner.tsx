@@ -22,9 +22,21 @@ export default function GameRunner({
   signedIn: boolean;
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const [runtimeAvailable, setRuntimeAvailable] = useState<boolean | null>(null);
   const [booted, setBooted] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
+
+  const goFullscreen = () => {
+    const target = wrapRef.current;
+    if (!target) return;
+    type FSEl = HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void>;
+      mozRequestFullScreen?: () => Promise<void>;
+    };
+    const el = target as FSEl;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen;
+    if (req) req.call(el);
+  };
 
   // Probe for runtime index.html existence
   useEffect(() => {
@@ -132,14 +144,19 @@ pnpm build:claude-mythos
   }
 
   return (
-    <div className={`relative ${fullscreen ? "fixed inset-0 z-50 bg-void-0 p-4" : ""}`}>
-      <div className="relative border border-eldritch-deep/60 bg-black overflow-hidden" style={{ aspectRatio: "16/9" }}>
+    <div>
+      <div
+        ref={wrapRef}
+        className="relative border border-eldritch-deep/60 bg-black overflow-hidden"
+        style={{ aspectRatio: "16/9" }}
+      >
         <iframe
           ref={iframeRef}
           src={`${runtimePath}/index.html?slug=${slug}`}
           title={slug}
           className="absolute inset-0 h-full w-full"
-          allow="autoplay; gamepad; fullscreen"
+          allow="autoplay; gamepad; fullscreen *"
+          allowFullScreen
           sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-popups"
         />
         {!booted && (
@@ -156,9 +173,7 @@ pnpm build:claude-mythos
           {booted ? "runtime ready" : "loading…"}
           {!signedIn && <span className="text-amber-signal ml-3">· not signed in — saves disabled</span>}
         </div>
-        <button className="btn" onClick={() => setFullscreen((f) => !f)}>
-          {fullscreen ? "▸ exit fullscreen" : "▸ fullscreen"}
-        </button>
+        <button className="btn" onClick={goFullscreen}>▸ fullscreen</button>
       </div>
     </div>
   );
