@@ -29,9 +29,13 @@ Portal code: [CC0](./LICENSE). Games: each under its own license.
 
 > The majority of titles on `games.brassey.io` come from
 > **[@ThePearlKing](https://github.com/ThePearlKing)** — primary game
-> developer for the platform. His game repos are the source of truth;
-> every Vercel deploy pulls `main` directly from GitHub, runs the build
-> pipeline ([how](#the-game-build-pipeline)), and ships fresh WASM.
+> developer for the platform. His game repos are the source of truth.
+> A GitHub Actions workflow
+> ([`.github/workflows/upstream-games-watch.yml`](./.github/workflows/upstream-games-watch.yml))
+> polls every 10 minutes; the moment any watched repo advances, the
+> portal is redeployed and the newest game code ships automatically.
+> New features, tweaks, and fixes land on the live site without any
+> manual step.
 
 <table>
   <tr>
@@ -641,25 +645,35 @@ pnpm build:games your-game
 
 ### Auto-deploy on upstream game pushes
 
-To trigger a portal rebuild when you push to a game repo:
+A GitHub Actions workflow in this repo
+([`.github/workflows/upstream-games-watch.yml`](./.github/workflows/upstream-games-watch.yml))
+polls every watched upstream game repo every 10 minutes. When any repo's
+`main` HEAD advances past the last-deployed SHA (tracked via
+`actions/cache`), it POSTs to a Vercel deploy hook and the portal
+redeploys, pulling the newest source through the normal build pipeline.
 
-1. **Vercel → Settings → Git → Deploy Hooks** — create a hook, copy the URL.
-2. In the game repo, add `.github/workflows/trigger-portal.yml`:
+**One-time setup:**
 
-   ```yaml
-   on:
-     push:
-       branches: [main]
-   jobs:
-     trigger:
-       runs-on: ubuntu-latest
-       steps:
-         - run: curl -X POST ${{ secrets.VERCEL_DEPLOY_HOOK }}
-   ```
+1. **Vercel → Project → Settings → Git → Deploy Hooks → Create Hook**
+   (name it e.g. *"upstream game push"*, branch `main`). Copy the URL.
+2. **GitHub → Repo → Settings → Secrets and variables → Actions → New
+   repository secret** — name `VERCEL_DEPLOY_HOOK`, paste the URL.
 
-3. Add the hook URL as a GitHub Actions secret named `VERCEL_DEPLOY_HOOK`.
+That's it. New commits to any watched game repo (currently
+`ThePearlKing/claude-mythos-game`) auto-redeploy within ~10 minutes. You
+can also manually run the workflow from the Actions tab ("Run workflow")
+to force a check.
 
-Now every game push kicks a new portal deploy with the fresh source.
+**To add another upstream repo to the watch list**, append its
+`owner/repo` slug to the `matrix.repo` list in the workflow file. Done.
+
+**Why polling, not a direct webhook?** A webhook from the upstream repo
+would be instant but requires the game author to add a webhook URL in
+their repo settings — this workflow lives entirely in the portal repo
+and needs nothing from the upstream. If you want instant deploys, give
+the same Vercel hook URL to the upstream repo maintainer and they can
+add it as a GitHub webhook ("push" event) — the two mechanisms are
+additive.
 
 ---
 

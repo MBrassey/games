@@ -1,0 +1,80 @@
+name: Upstream game watch
+
+# Triggers a Vercel production redeploy whenever any of the upstream
+# game repos we pull during build advances past the last-deployed commit.
+#
+# Runs every 10 minutes (GitHub's minimum scheduling granularity is fine
+# here — the build itself is ~1 min and Neon/Upstash don't care). Also
+# runnable manually via the "Run workflow" button.
+#
+# Setup (one-time):
+#   1. Vercel → Project → Settings → Git → Deploy Hooks → Create Hook
+#      (name it e.g. "upstream game push", branch "main"), copy the URL.
+#   2. GitHub → Repo → Settings → Secrets and variables → Actions →
+#      New repository secret → name `VERCEL_DEPLOY_HOOK`, paste the URL.
+#
+# To add another upstream game repo to the watch list: append its
+# owner/repo slug to the `repos` matrix below. No other changes needed.
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: upstream-game-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        repo:
+          - ThePearlKing/claude-mythos-game
+        branch:
+          - main
+    steps:
+      - name: Fetch upstream HEAD SHA for ${{ matrix.repo }}@${{ matrix.branch }}
+        id: upstream
+        run: |
+          SHA=$(curl -fsSL -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ matrix.repo }}/commits/${{ matrix.branch }}" \
+            | jq -r '.sha')
+          if [ -z "$SHA" ] || [ "$SHA" = "null" ]; then
+            echo "failed to resolve upstream SHA" >&2
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "upstream ${{ matrix.repo }}@${{ matrix.branch }} is at $SHA"
+
+      - name: Check cache for this SHA (deploy marker)
+        id: marker
+        uses: actions/cache@v4
+        with:
+          # Cache key IS the upstream SHA — presence means "already
+          # triggered a deploy for this commit." Absence means new commit.
+          key: deployed-${{ matrix.repo }}-${{ steps.upstream.outputs.sha }}
+          path: .marker
+
+      - name: Trigger Vercel redeploy (if upstream advanced)
+        if: steps.marker.outputs.cache-hit != 'true'
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::error::VERCEL_DEPLOY_HOOK secret is not set."
+            echo "::error::Create a deploy hook in Vercel → Settings → Git and add it as a repo secret."
+            exit 1
+          fi
+          echo "New upstream HEAD for ${{ matrix.repo }} — poking Vercel…"
+          curl -fsSL -X POST "$HOOK" -o /tmp/hook-response.json
+          cat /tmp/hook-response.json
+          mkdir -p "$(dirname .marker)"
+          echo "${{ steps.upstream.outputs.sha }} at $(date -u +%FT%TZ)" > .marker
+
+      - name: No change (skip)
+        if: steps.marker.outputs.cache-hit == 'true'
+        run: |
+          echo "Upstream ${{ matrix.repo }} unchanged at ${{ steps.upstream.outputs.sha }} — no deploy."
