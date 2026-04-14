@@ -1,18 +1,47 @@
 # games.brassey.io
 
-A sophisticated dark-terminal portal for LÖVE2D games, running natively in
-the browser via [love.js](https://github.com/Davidobot/love.js). Hosts many
-hand-built games under one roof with GitHub sign-in, cross-device save
-sync, a global chat channel that spans every title, playtime telemetry,
-per-user public profiles, synthesized Starcraft-flavored UI SFX, and a
+<p align="center">
+  <img src="public/brand/logo-wide.svg" alt="GAMES :: BRASSEY — a terminal for LÖVE2D // web native" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://games.brassey.io"><img alt="Live" src="https://img.shields.io/badge/live-games.brassey.io-66e0ff?labelColor=030208&style=flat-square"></a>
+  <a href="./LICENSE"><img alt="License: CC0-1.0" src="https://img.shields.io/badge/license-CC0--1.0-8a4fff?labelColor=030208&style=flat-square"></a>
+  <img alt="Stack" src="https://img.shields.io/badge/stack-Next.js%2015%20%C2%B7%20Auth.js%20%C2%B7%20love.js-33ff66?labelColor=030208&style=flat-square">
+  <img alt="Host" src="https://img.shields.io/badge/host-Vercel%20only-ff6bd6?labelColor=030208&style=flat-square">
+</p>
+
+A dark-terminal portal for LÖVE2D games, running in the browser via
+[love.js](https://github.com/Davidobot/love.js). Features: GitHub sign-in,
+cross-device save sync, a global chat channel spanning every title,
+playtime telemetry, public per-user profiles, synthesized UI SFX, and a
 procedural ambient soundtrack.
 
-100% Vercel — no Supabase, no Clerk, no third-party auth, no extra vendors
-or bills. Free tier all the way up.
+Deployed at [games.brassey.io](https://games.brassey.io). Hosted on Vercel;
+Postgres via Neon, Redis via Upstash, auth via Auth.js (self-hosted
+library, no auth-as-a-service dependency).
 
-License: [CC0](#license) — public domain, do whatever you want.
+License: [CC0](./LICENSE).
 
 ---
+
+## Brand assets
+
+- **Icon / favicon** — [`public/favicon.svg`](./public/favicon.svg) · 32×32 version of the mark.
+- **Square logo** — [`public/brand/logo.svg`](./public/brand/logo.svg) + [`logo.png`](./public/brand/logo.png) · 512×512, bracketed-chrome frame, hex mark with inner spokes and glowing cyan core.
+- **Wide wordmark** — [`public/brand/logo-wide.svg`](./public/brand/logo-wide.svg) + [`logo-wide.png`](./public/brand/logo-wide.png) · 1600×400, usable as OG image or header banner.
+
+<p>
+  <a href="./public/brand/logo.svg">
+    <img src="public/brand/logo.svg" alt="logo" height="160" align="left">
+  </a>
+  The mark is a hexagonal node — one central cyan core, three spokes into
+  three violet nodes, scanlined CRT plate, bracketed corner chrome. Palette
+  lifted from <em>Claude: Mythos</em>: void purples, abyss cyan, matrix green,
+  blood red.
+</p>
+
+<br clear="left">
 
 ## Contents
 
@@ -377,8 +406,8 @@ us everything we need for:
 
 For twitchy PvP action sync, the path is a separate self-hosted socket
 server (Fly.io free tier, or $5 VPS) signaled through the existing SSE
-channels. The portal stays 100% Vercel; only the specific game that
-needs it spins up its own socket server.
+channels. The portal itself stays on Vercel; only the specific game that
+needs 60 Hz sync spins up its own socket server.
 
 ---
 

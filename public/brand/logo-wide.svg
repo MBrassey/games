@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 400" role="img" aria-label="games.brassey.io">
+  <title>games.brassey.io</title>
+  <defs>
+    <linearGradient id="wVoidBg" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#030208"/>
+      <stop offset="50%" stop-color="#070414"/>
+      <stop offset="100%" stop-color="#0c0820"/>
+    </linearGradient>
+    <linearGradient id="wHexStroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8a4fff"/>
+      <stop offset="100%" stop-color="#66e0ff"/>
+    </linearGradient>
+    <radialGradient id="wCoreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#66e0ff" stop-opacity="0.9"/>
+      <stop offset="60%" stop-color="#66e0ff" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#66e0ff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="wGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="wSoftGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <pattern id="wGrid" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#8a4fff" stroke-opacity="0.08" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+
+  <rect width="1600" height="400" fill="url(#wVoidBg)"/>
+  <rect width="1600" height="400" fill="url(#wGrid)"/>
+
+  <!-- corner brackets -->
+  <g stroke="#8a4fff" stroke-width="2" fill="none" opacity="0.7">
+    <path d="M 16 48 L 16 16 L 48 16"/>
+    <path d="M 1584 48 L 1584 16 L 1552 16"/>
+    <path d="M 16 352 L 16 384 L 48 384"/>
+    <path d="M 1584 352 L 1584 384 L 1552 384"/>
+  </g>
+
+  <!-- ambient halo behind mark -->
+  <circle cx="220" cy="200" r="180" fill="url(#wCoreGlow)"/>
+
+  <!-- the hex mark -->
+  <g transform="translate(60,60)">
+    <g filter="url(#wGlow)">
+      <path
+        d="M 40 112 L 160 48 L 280 112 L 280 240 L 160 304 L 40 240 Z"
+        fill="none"
+        stroke="url(#wHexStroke)"
+        stroke-width="4.5"
+        stroke-linejoin="round"
+      />
+    </g>
+    <path
+      d="M 80 136 L 160 88 L 240 136 L 240 216 L 160 264 L 80 216 Z"
+      fill="none"
+      stroke="#8a4fff"
+      stroke-width="1"
+      stroke-opacity="0.5"
+      stroke-dasharray="4 6"
+    />
+    <g stroke="#8a4fff" stroke-width="2.2" stroke-linecap="round" opacity="0.85" filter="url(#wSoftGlow)">
+      <line x1="160" y1="176" x2="94" y2="136"/>
+      <line x1="160" y1="176" x2="226" y2="136"/>
+      <line x1="160" y1="176" x2="160" y2="252"/>
+    </g>
+    <g fill="#8a4fff" filter="url(#wSoftGlow)">
+      <circle cx="94" cy="136" r="4.5"/>
+      <circle cx="226" cy="136" r="4.5"/>
+      <circle cx="160" cy="252" r="4.5"/>
+    </g>
+    <circle cx="160" cy="176" r="18" fill="#030208"/>
+    <circle cx="160" cy="176" r="16" fill="none" stroke="#66e0ff" stroke-width="1.8"/>
+    <circle cx="160" cy="176" r="8" fill="#66e0ff" filter="url(#wGlow)"/>
+  </g>
+
+  <!-- wordmark -->
+  <g font-family="JetBrains Mono, IBM Plex Mono, ui-monospace, monospace">
+    <!-- small status stamp above -->
+    <text
+      x="480" y="142"
+      fill="#8a4fff"
+      font-size="22"
+      letter-spacing="10"
+      font-weight="600"
+    >
+      SESSION :: ONLINE
+    </text>
+
+    <!-- main wordmark -->
+    <text
+      x="480" y="232"
+      fill="#d8d0e6"
+      font-size="96"
+      letter-spacing="14"
+      font-weight="700"
+      filter="url(#wSoftGlow)"
+    >
+      GAMES<tspan fill="#8a4fff">::</tspan>BRASSEY
+    </text>
+
+    <!-- tagline -->
+    <text
+      x="480" y="296"
+      fill="#66e0ff"
+      font-size="26"
+      letter-spacing="8"
+    >
+      <tspan fill="#8a4fff">▸</tspan> a terminal for <tspan font-style="italic">LÖVE2D</tspan> // web native
+    </text>
+
+    <!-- meta row -->
+    <text
+      x="480" y="342"
+      fill="#d8d0e6"
+      fill-opacity="0.5"
+      font-size="18"
+      letter-spacing="6"
+    >
+      games.brassey.io · cc0 · 2026
+    </text>
+  </g>
+
+  <!-- scanline overlay -->
+  <g opacity="0.08">
+    <rect width="1600" height="1" y="0" fill="#ffffff"/>
+    <rect width="1600" height="1" y="4" fill="#ffffff"/>
+    <rect width="1600" height="1" y="8" fill="#ffffff"/>
+    <rect width="1600" height="1" y="12" fill="#ffffff"/>
+    <rect width="1600" height="1" y="16" fill="#ffffff"/>
+  </g>
+  <rect width="1600" height="400" fill="none" stroke="#8a4fff" stroke-opacity="0.3" stroke-width="1"/>
+</svg>

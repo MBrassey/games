@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { sound } from "@/lib/sound";
 
 type IncomingMsg =
+  | { type: "loveweb:hello"; game: string }
   | { type: "loveweb:ready"; game: string }
   | { type: "loveweb:save:write"; path: string; dataB64: string; meta?: Record<string, unknown> }
   | { type: "loveweb:save:read"; path: string; reqId: string }
@@ -45,6 +46,49 @@ export default function GameRunner({
     }
   }, []);
 
+  // Block mouse-back / mouse-forward navigation while on a game page. The
+  // side buttons (button 3 / 4) trigger browser history navigation by
+  // default — easy to press by accident mid-game. We preventDefault on
+  // mousedown/mouseup/auxclick for those buttons on BOTH the parent page
+  // and the iframe's contentDocument (same-origin, so we can attach
+  // directly), and also push a history state so any nav that sneaks past
+  // (OS gestures, trackpad swipes, Alt+Left) gets immediately cancelled.
+  useEffect(() => {
+    const blockSideButtons = (e: MouseEvent) => {
+      if (e.button === 3 || e.button === 4) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    const attach = (target: EventTarget) => {
+      target.addEventListener("mousedown", blockSideButtons as EventListener, true);
+      target.addEventListener("mouseup", blockSideButtons as EventListener, true);
+      target.addEventListener("auxclick", blockSideButtons as EventListener, true);
+    };
+    const detach = (target: EventTarget) => {
+      target.removeEventListener("mousedown", blockSideButtons as EventListener, true);
+      target.removeEventListener("mouseup", blockSideButtons as EventListener, true);
+      target.removeEventListener("auxclick", blockSideButtons as EventListener, true);
+    };
+    attach(window);
+    const iframeDoc = iframeRef.current?.contentDocument ?? null;
+    if (iframeDoc) attach(iframeDoc);
+
+    // History trap: shove an extra entry on the stack. Any back gesture
+    // pops it and we push it back — player stays on the game page until
+    // they click a nav link.
+    const href = window.location.href;
+    window.history.pushState({ gameGuard: true }, "", href);
+    const onPopstate = () => { window.history.pushState({ gameGuard: true }, "", href); };
+    window.addEventListener("popstate", onPopstate);
+
+    return () => {
+      detach(window);
+      if (iframeDoc) detach(iframeDoc);
+      window.removeEventListener("popstate", onPopstate);
+    };
+  }, []);
+
   // Soft-mute the portal music while a game page is loaded, without
   // tearing down the audio engine. UI SFX still work; navigating back
   // fades music in again. Important: we don't call sound.disable() /
@@ -56,12 +100,33 @@ export default function GameRunner({
     return () => { restore(); };
   }, []);
 
-  // Playtime tracking: POST to /api/stats/heartbeat every 30s while the
-  // runtime is alive. The server rolls heartbeats into sessions (see
-  // migrations/0002_stats.sql). Only runs when signed in.
+  // Playtime tracking. Every 30s we POST to /api/stats/heartbeat, but
+  // ONLY if the player has been interactive within the last 2 minutes
+  // and the tab is visible. Otherwise we stop pinging — the server's
+  // GAP_SECONDS=120 rule then rolls that into a new session when the
+  // user comes back, so idle time never accrues as playtime.
+  //
+  // "Active" = any pointerdown / keydown / mousemove in either the
+  // parent page OR the game iframe's contentDocument (same-origin,
+  // so we can observe input directly).
   useEffect(() => {
     if (!booted || !signedIn) return;
+    const IDLE_MS = 120_000;
+    let lastActivity = Date.now();
+    const markActive = () => { lastActivity = Date.now(); };
+
+    const pageEvts = ["pointerdown", "keydown", "mousemove"] as const;
+    for (const e of pageEvts) window.addEventListener(e, markActive, { passive: true });
+
+    const iframe = iframeRef.current;
+    const doc = iframe?.contentDocument ?? null;
+    if (doc) {
+      for (const e of pageEvts) doc.addEventListener(e, markActive, { passive: true });
+    }
+
     const ping = () => {
+      if (document.hidden) return;                      // tab not visible — skip
+      if (Date.now() - lastActivity > IDLE_MS) return;  // user idle — skip
       fetch("/api/stats/heartbeat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -71,7 +136,11 @@ export default function GameRunner({
     };
     ping();
     const t = setInterval(ping, 30_000);
-    return () => clearInterval(t);
+    return () => {
+      clearInterval(t);
+      for (const e of pageEvts) window.removeEventListener(e, markActive);
+      if (doc) for (const e of pageEvts) doc.removeEventListener(e, markActive);
+    };
   }, [booted, signedIn, slug]);
 
   // Probe for runtime index.html existence
@@ -86,6 +155,28 @@ export default function GameRunner({
     })();
   }, [runtimePath]);
 
+  // Extracted so both `loveweb:hello` and the iframe's `onLoad` can use it.
+  // Pushes the manifest + auth state to the runtime, triggering save
+  // prepopulation. Safe to call more than once per iframe lifetime — the
+  // runtime resolves its manifest promise at most once.
+  const pushManifest = async () => {
+    const iframe = iframeRef.current;
+    if (!iframe || !iframe.contentWindow) return;
+    const reply = (msg: unknown) => iframe.contentWindow?.postMessage(msg, "*");
+    if (signedIn) {
+      try {
+        const r = await fetch(`/api/saves?game=${encodeURIComponent(slug)}`);
+        const j = r.ok ? await r.json() : { files: [] };
+        reply({ type: "loveweb:saves:manifest", files: j.files ?? [] });
+      } catch {
+        reply({ type: "loveweb:saves:manifest", files: [] });
+      }
+    } else {
+      reply({ type: "loveweb:saves:manifest", files: [] });
+    }
+    reply({ type: "loveweb:auth", signedIn });
+  };
+
   // postMessage bridge
   useEffect(() => {
     const onMessage = async (ev: MessageEvent) => {
@@ -98,17 +189,13 @@ export default function GameRunner({
       };
 
       try {
-        if (data.type === "loveweb:ready") {
+        if (data.type === "loveweb:hello") {
+          // Iframe script just parsed, WASM init hasn't started yet.
+          // Push the manifest right now so it's waiting in the runtime's
+          // message queue by the time preRun fires.
+          await pushManifest();
+        } else if (data.type === "loveweb:ready") {
           setBooted(true);
-          // Push initial save manifest so runtime can prepopulate its FS
-          if (signedIn) {
-            const r = await fetch(`/api/saves?game=${encodeURIComponent(slug)}`);
-            if (r.ok) {
-              const { files } = await r.json();
-              reply({ type: "loveweb:saves:manifest", files });
-            }
-          }
-          reply({ type: "loveweb:auth", signedIn });
         } else if (data.type === "loveweb:save:write") {
           if (!signedIn) return;
           await fetch(`/api/saves`, {
@@ -235,6 +322,12 @@ pnpm build:claude-mythos
           allow="autoplay; gamepad; fullscreen"
           allowFullScreen
           sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-popups allow-forms"
+          // Belt-and-suspenders: push the manifest again on iframe load,
+          // in case the iframe's inline `loveweb:hello` message fired
+          // before our React `useEffect` attached its message listener.
+          // The runtime's manifest promise only resolves once, so this is
+          // a safe second chance and a no-op if hello was caught first.
+          onLoad={() => { void pushManifest(); }}
         />
         {!booted && (
           <div className="absolute inset-0 flex items-center justify-center bg-void-0/80 pointer-events-none">

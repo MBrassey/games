@@ -40,6 +40,7 @@ export default async function TopBar() {
           </Link>
           <nav className="hidden md:flex items-center gap-4 text-[0.68rem] tracking-[0.25em] uppercase text-bone/50">
             <Link href="/" className="hover:text-abyss-cyan">Library</Link>
+            <Link href="/leaderboard" className="hover:text-abyss-cyan">Ranks</Link>
             {user && <Link href="/stats" className="hover:text-abyss-cyan">Stats</Link>}
           </nav>
         </div>

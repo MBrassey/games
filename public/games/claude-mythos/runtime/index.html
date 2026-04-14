@@ -52,14 +52,20 @@
   <script>
     // --- bridge state ---
     var SLUG = new URLSearchParams(location.search).get("slug") || "claude-mythos";
-    // love.js default save dir (emscripten): /home/web_user/.local/share/LOVE/<identity>/
-    // Identity comes from conf.lua (t.identity). We scan this root for any writes.
-    var SAVE_ROOT = "/home/web_user/.local/share/LOVE";
+    // love.js save dir (emscripten): /home/web_user/love/<identity>/ —
+    // verified empirically by scripts/probe-save-dir.mjs which injects
+    // `print(love.filesystem.getSaveDirectory())` into main.lua. NOT the
+    // Linux convention `/home/USER/.local/share/love/<id>/`; emscripten's
+    // love build drops the XDG path and uses a flat /love/ dir directly
+    // under HOME. Do not change without re-running the probe.
+    var SAVE_ROOT = "/home/web_user/love";
 
     var manifestResolve;
     var manifestPromise = new Promise(function (res) { manifestResolve = res; });
     var pendingReads = new Map();
 
+    // Register the message listener BEFORE announcing our existence, so we
+    // don't miss a fast reply.
     window.addEventListener("message", (ev) => {
       const d = ev.data;
       if (!d || typeof d !== "object") return;
@@ -87,6 +93,15 @@
       return btoa(s);
     }
     function log(level, msg) { parent.postMessage({ type: "loveweb:log", level, msg: String(msg) }, "*"); }
+
+    // Tell the parent we're alive immediately, before WASM init starts.
+    // The parent answers with loveweb:saves:manifest, which arrives during
+    // WASM init and is ready by the time preRun awaits it.
+    //
+    // Previously the manifest was only sent after loveweb:ready (postRun),
+    // which fires AFTER the game has already booted and read from MEMFS
+    // — meaning saves never appeared in-game no matter what we stored.
+    try { parent.postMessage({ type: "loveweb:hello", game: SLUG }, "*"); } catch (e) {}
 
     function goFullScreen() {
       const c = document.getElementById("canvas");
@@ -135,18 +150,32 @@
           Module.addRunDependency("loveweb-saves");
           (async () => {
             try {
+              // IMPORTANT: use Module.FS, not bare FS. Emscripten's FS is
+              // a closure-local in love.js; it's only exposed to user code
+              // via the Module object. Referencing `FS` here resolves to
+              // window.FS, which is undefined — previously every write
+              // silently failed with a "ReferenceError: FS is not defined"
+              // buried in the bridge log.
+              const FS = Module.FS;
+              if (!FS) throw new Error("Module.FS not available");
+
               const files = await Promise.race([
                 manifestPromise,
-                new Promise((res) => setTimeout(() => res([]), 4000)),
+                new Promise((res) => setTimeout(function(){ res([]); }, 4000)),
               ]);
               for (const f of files) {
                 const b64 = await requestRemoteRead(f.path);
-                if (!b64) continue;
+                if (!b64) { log("warn", "no data returned for " + f.path); continue; }
                 const bytes = b64ToBytes(b64);
                 const full = SAVE_ROOT + "/" + f.path.replace(/^\//, "");
                 const dir = full.substring(0, full.lastIndexOf("/"));
                 try { FS.mkdirTree(dir); } catch {}
-                try { FS.writeFile(full, bytes); } catch (e) { log("warn", "write " + full + ": " + e); }
+                try {
+                  FS.writeFile(full, bytes);
+                  log("info", "wrote " + full + " (" + bytes.length + " bytes)");
+                } catch (e) {
+                  log("warn", "write " + full + ": " + e);
+                }
               }
               log("info", "prepopulated " + files.length + " save file(s)");
             } catch (e) { log("warn", "prepopulate: " + e); }
@@ -157,6 +186,9 @@
       postRun: [
         function startSyncLoop() {
           parent.postMessage({ type: "loveweb:ready", game: SLUG }, "*");
+
+          const FS = Module.FS; // same gotcha as prePopulate; use Module.FS
+          if (!FS) { log("error", "postRun: Module.FS not available"); return; }
 
           const mtimes = new Map();
           function walk(dir, visit) {

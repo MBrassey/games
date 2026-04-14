@@ -21,7 +21,7 @@
 //   node scripts/build-games.mjs           # build all
 //   node scripts/build-games.mjs <slug>    # build one
 
-import { mkdirSync, readdirSync, cpSync, rmSync, existsSync, copyFileSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, cpSync, rmSync, existsSync, copyFileSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -129,6 +129,30 @@ async function buildGame(game) {
   }
   // Overwrite index.html with the bridge-enabled template
   copyFileSync(TEMPLATE_HTML, join(runtimeDir, "index.html"));
+
+  // Post-patch love.js to expose the emscripten FS object on Module.
+  // love.js's default build only exports a handful of FS_* helpers
+  // (FS_createDataFile, FS_createPath, ...) and keeps the full FS
+  // closure-private. We need FS.readdir / FS.stat / FS.readFile in the
+  // bridge to pre-populate saves and sync changes back to the server.
+  // This adds `Module["FS"]=FS` right next to where emscripten exports
+  // the other helpers — one-line patch, safe across love.js versions
+  // since it only adds an extra assignment.
+  const loveJsPath = join(runtimeDir, "love.js");
+  let js = readFileSync(loveJsPath, "utf8");
+  if (!js.includes('Module["FS"]=FS')) {
+    const before = js.length;
+    js = js.replace(
+      /(Module\["FS_createDataFile"\]\s*=\s*FS\.createDataFile\s*;?)/,
+      '$1Module["FS"]=FS;'
+    );
+    if (js.length === before) {
+      console.warn(`  warn: could not inject Module["FS"]=FS into love.js — save bridge will not work`);
+    } else {
+      writeFileSync(loveJsPath, js);
+      console.log(`  ok  patched love.js to export Module.FS`);
+    }
+  }
 
   console.log(`  ok  ${runtimeDir}`);
 }
