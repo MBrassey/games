@@ -21,21 +21,65 @@ Deployed at [games.brassey.io](https://games.brassey.io). Hosted on Vercel;
 Postgres via Neon, Redis via Upstash, auth via Auth.js (self-hosted
 library, no auth-as-a-service dependency).
 
-License: [CC0](./LICENSE). Games hosted here carry their own licenses.
+Portal code: [CC0](./LICENSE). Games: each under its own license.
 
 ---
 
-## Games
+## Games on the portal
 
-| Title | Author | Source |
-| --- | --- | --- |
-| **Claude: Mythos** | [@ThePearlKing](https://github.com/ThePearlKing) | [ThePearlKing/claude-mythos-game](https://github.com/ThePearlKing/claude-mythos-game) |
+> The majority of titles on `games.brassey.io` come from
+> **[@ThePearlKing](https://github.com/ThePearlKing)** — primary game
+> developer for the platform. His game repos are the source of truth;
+> every Vercel deploy pulls `main` directly from GitHub, runs the build
+> pipeline ([how](#the-game-build-pipeline)), and ships fresh WASM.
 
-The Claude: Mythos repo above is the source of truth — every Vercel
-deploy pulls its `main` branch, runs the build pipeline
-([see below](#the-game-build-pipeline)), and ships the compiled WASM.
-New games are added by appending an entry to `src/lib/games.ts`
-pointing at any LÖVE2D GitHub repo ([see below](#adding-a-new-game)).
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>
+        <a href="https://github.com/ThePearlKing/claude-mythos-game">
+          Claude: Mythos
+        </a>
+      </h3>
+      <p>
+        <em>An eldritch bullet-survivor descent into the void sea.</em>
+      </p>
+      <p>
+        Wave-based arcade survivor threaded with eldritch horror. Navigate
+        the void sea, build decks of cosmic powers, and hold the line
+        against the rising tide.
+      </p>
+      <p>
+        <strong>Developer:</strong>
+        <a href="https://github.com/ThePearlKing">@ThePearlKing</a><br/>
+        <strong>Source:</strong>
+        <a href="https://github.com/ThePearlKing/claude-mythos-game">
+          github.com/ThePearlKing/claude-mythos-game
+        </a><br/>
+        <strong>Tags:</strong> bullet-hell · roguelite · eldritch · cards<br/>
+        <strong>Play:</strong>
+        <a href="https://games.brassey.io/games/claude-mythos">
+          games.brassey.io/games/claude-mythos
+        </a>
+      </p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>Add your own</h3>
+      <p>
+        The portal is built to onboard new titles with a single entry in
+        <code>src/lib/games.ts</code>, pointing at any LÖVE2D GitHub repo.
+        The build pipeline handles the rest: clones the source, applies
+        LuaJIT → Lua 5.1 compat patches, packs a <code>.love</code>,
+        compiles via love.js, and drops it into
+        <code>public/games/&lt;slug&gt;/runtime/</code> on every deploy.
+      </p>
+      <p>
+        See <a href="#adding-a-new-game">Adding a new game</a> below for
+        the one-line registry entry.
+      </p>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -59,7 +103,7 @@ pointing at any LÖVE2D GitHub repo ([see below](#adding-a-new-game)).
 
 ## Contents
 
-1. [Games](#games)
+1. [Games on the portal](#games-on-the-portal)
 2. [Architecture at a glance](#architecture-at-a-glance)
 3. [Stack](#stack)
 4. [Data model](#data-model)
