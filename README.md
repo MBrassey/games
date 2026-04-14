@@ -21,7 +21,21 @@ Deployed at [games.brassey.io](https://games.brassey.io). Hosted on Vercel;
 Postgres via Neon, Redis via Upstash, auth via Auth.js (self-hosted
 library, no auth-as-a-service dependency).
 
-License: [CC0](./LICENSE).
+License: [CC0](./LICENSE). Games hosted here carry their own licenses.
+
+---
+
+## Games
+
+| Title | Author | Source |
+| --- | --- | --- |
+| **Claude: Mythos** | [@ThePearlKing](https://github.com/ThePearlKing) | [ThePearlKing/claude-mythos-game](https://github.com/ThePearlKing/claude-mythos-game) |
+
+The Claude: Mythos repo above is the source of truth — every Vercel
+deploy pulls its `main` branch, runs the build pipeline
+([see below](#the-game-build-pipeline)), and ships the compiled WASM.
+New games are added by appending an entry to `src/lib/games.ts`
+pointing at any LÖVE2D GitHub repo ([see below](#adding-a-new-game)).
 
 ---
 
@@ -45,27 +59,28 @@ License: [CC0](./LICENSE).
 
 ## Contents
 
-1. [Architecture at a glance](#architecture-at-a-glance)
-2. [Stack](#stack)
-3. [Data model](#data-model)
-4. [Authentication](#authentication)
-5. [The game build pipeline](#the-game-build-pipeline)
-6. [Runtime bridge (iframe ↔ portal)](#runtime-bridge-iframe--portal)
-7. [Save-state sync](#save-state-sync)
-8. [Chat system (SSE + KV pub/sub)](#chat-system-sse--kv-pubsub)
-9. [Presence, multiplayer, and Vercel's WebSocket limit](#presence-multiplayer-and-vercels-websocket-limit)
-10. [Telemetry and stats](#telemetry-and-stats)
-11. [Audio engine](#audio-engine)
-12. [Visual theme and effects](#visual-theme-and-effects)
-13. [Adding a new game](#adding-a-new-game)
-14. [Local development](#local-development)
-15. [Vercel setup](#vercel-setup)
-16. [GitHub OAuth](#github-oauth)
-17. [Namecheap DNS](#namecheap-dns)
-18. [Troubleshooting](#troubleshooting)
-19. [File layout](#file-layout)
-20. [Scripts](#scripts)
-21. [License](#license)
+1. [Games](#games)
+2. [Architecture at a glance](#architecture-at-a-glance)
+3. [Stack](#stack)
+4. [Data model](#data-model)
+5. [Authentication](#authentication)
+6. [The game build pipeline](#the-game-build-pipeline)
+7. [Runtime bridge (iframe ↔ portal)](#runtime-bridge-iframe--portal)
+8. [Save-state sync](#save-state-sync)
+9. [Chat system (SSE + KV pub/sub)](#chat-system-sse--kv-pubsub)
+10. [Presence, multiplayer, and Vercel's WebSocket limit](#presence-multiplayer-and-vercels-websocket-limit)
+11. [Telemetry and stats](#telemetry-and-stats)
+12. [Audio engine](#audio-engine)
+13. [Visual theme and effects](#visual-theme-and-effects)
+14. [Adding a new game](#adding-a-new-game)
+15. [Local development](#local-development)
+16. [Vercel setup](#vercel-setup)
+17. [GitHub OAuth](#github-oauth)
+18. [Namecheap DNS](#namecheap-dns)
+19. [Troubleshooting](#troubleshooting)
+20. [File layout](#file-layout)
+21. [Scripts](#scripts)
+22. [License](#license)
 
 ---
 
@@ -875,7 +890,9 @@ You can copy, modify, distribute, and use this code for any purpose,
 commercial or non-commercial, without attribution, permission, or
 payment. No rights reserved.
 
-Games pulled from third-party GitHub repos (like
-`ThePearlKing/claude-mythos-game`) carry **their own licenses** — they
-are not covered by this project's CC0 grant. Respect each game repo's
-LICENSE file.
+Games hosted on the portal are third-party works published under their
+own licenses, **not covered** by this project's CC0 grant. See each
+game's upstream repo for its terms:
+
+- **Claude: Mythos** by [@ThePearlKing](https://github.com/ThePearlKing)
+  — [github.com/ThePearlKing/claude-mythos-game](https://github.com/ThePearlKing/claude-mythos-game)
