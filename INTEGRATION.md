@@ -44,14 +44,15 @@ a sharp-edges list and a copy-paste starter skeleton.
 12. [Achievements](#achievements)
 13. [Runtime UI effects](#runtime-ui-effects)
 14. [Bridge protocol reference](#bridge-protocol-reference)
-14. [Debugging — getting logs out of the iframe](#debugging--getting-logs-out-of-the-iframe)
-15. [Local development loop](#local-development-loop)
-16. [Smoke testing](#smoke-testing)
-17. [Getting listed on the portal](#getting-listed-on-the-portal)
-18. [Upstream auto-deploy](#upstream-auto-deploy)
-19. [Starter skeleton](#starter-skeleton)
-20. [Shipping checklist](#shipping-checklist)
-21. [Pitfalls & fixes](#pitfalls--fixes)
+15. [Debugging — getting logs out of the iframe](#debugging--getting-logs-out-of-the-iframe)
+16. [Local development loop](#local-development-loop)
+17. [Verifying the toast pipeline](#verifying-the-toast-pipeline-without-a-real-unlock)
+18. [Smoke testing](#smoke-testing)
+19. [Getting listed on the portal](#getting-listed-on-the-portal)
+20. [Upstream auto-deploy](#upstream-auto-deploy)
+21. [Starter skeleton](#starter-skeleton)
+22. [Shipping checklist](#shipping-checklist)
+23. [Pitfalls & fixes](#pitfalls--fixes)
 
 ---
 
@@ -161,7 +162,10 @@ Minimal recommended `conf.lua`:
 
 ```lua
 function love.conf(t)
-  t.identity = "your-game"        -- save dir name. Keep stable forever.
+  t.identity = "your_game"        -- save dir name. Keep stable forever.
+                                  -- Must match the portal's GameEntry
+                                  -- `identity` (default: slug with
+                                  -- dashes → underscores).
   t.version  = "11.5"             -- target LÖVE 11.5
   t.console  = false              -- no OS console in a browser iframe
 
@@ -183,7 +187,15 @@ end
 **`t.identity` is load-bearing.** It's baked into the save directory
 path (`/home/web_user/love/<identity>/`). Change it after shipping and
 every player's saves look empty to the game. Pick once, commit.
-Recommended: use the same slug the portal uses for your game entry.
+
+**Tell the portal what your identity is.** The portal needs to know
+your identity string to place `__loveweb__/achievements.json` inside
+the right subdir (so `love.filesystem.read("__loveweb__/achievements.json")`
+can actually find it). In your [registration PR](#getting-listed-on-the-portal)
+add an explicit `identity:` field to your `GameEntry` — if you forget,
+the portal defaults to `<your-slug>` with dashes converted to
+underscores (e.g. slug `my-roguelike` → identity `my_roguelike`). Easiest:
+make your `t.identity` match that derivation so the default Just Works.
 
 ---
 
@@ -321,10 +333,11 @@ scale — never rely on `image-rendering: pixelated` in the iframe.
 
 ### Keyboard
 
-Normal LÖVE keyboard callbacks work. The portal's outer page swallows
-browser default behavior for space, arrow keys, and backspace inside
-the iframe via `preventDefault` — so pressing space won't scroll the
-page behind you.
+Normal LÖVE keyboard callbacks work. The runtime shell inside the
+iframe calls `preventDefault()` on keydowns for **space and the four
+arrow keys** — so pressing space doesn't scroll the page behind you and
+arrow keys don't move focus rings or scroll the viewport. Every other
+key passes straight through to LÖVE untouched.
 
 ### Mouse
 
@@ -361,10 +374,12 @@ be frustrated when they return to a dead-or-worse game state.
 
 ## Audio
 
-Browsers require a user gesture before audio plays. The portal wires
-up global click/keydown listeners to unlock audio on first gesture;
-your game's `love.audio` calls will just work from the user's first
-interaction onward.
+Browsers require a user gesture before any audio can play. The portal's
+own ambient soundtrack attempts an eager resume on mount (works for
+SPA navigations and returning visitors whose browsers have granted
+autoplay permission) and otherwise unlocks on the first click/keydown
+anywhere on the page. Once the AudioContext is running, `love.audio`
+in your game works normally without any extra setup on your side.
 
 Gotchas specific to the web target:
 
@@ -710,7 +725,7 @@ stream, and posts it to the parent, which applies the effect.
 | `calm`      | `<color> <intensity>`                       | **Persistent.** Soft radial soothing glow from center. Meditative — reads as a sanctuary, not an alarm. Clear with `calm none`. |
 | `pulsate`   | `<color> <bpm> <intensity>`                 | **Persistent.** Rhythmic heartbeat throb at `bpm` (20–200). Clear with `pulsate off`.                                       |
 | `pulse`     | `<color> <ms>`                              | Expanding ring out from viewport center. One-shot.                                                                          |
-| `ripple`    | `<color> <x%> <y%> <ms>`                    | Concentric wave expanding from an origin point (0..1 percent). Multiple can overlap.                                        |
+| `ripple`    | `<color> <x> <y> <ms>`                      | Concentric wave expanding from an origin point — `x` and `y` are fractions of the viewport (`0.0`–`1.0`; `0.5 0.5` = center). Multiple ripples can overlap. |
 | `glow`      | `<color> <intensity> <ms>`                  | Edge-lit halo, inset into the viewport rim. Fades out.                                                                      |
 | `chroma`    | `<intensity> <ms>`                          | Brief chromatic aberration / RGB-split.                                                                                     |
 | `vignette`  | `<intensity> <ms>`                          | Darkens the viewport edges for `ms`.                                                                                        |
@@ -826,8 +841,9 @@ table.
 | `loveweb:auth`                 | `{ signedIn: boolean }`                                  | Informs the runtime whether save sync is available.   |
 | `loveweb:saves:manifest`       | `{ files: [{ path, updated_at }] }`                      | List of cloud save files to pull into MEMFS.          |
 | `loveweb:save:data`            | `{ reqId, dataB64 \| null }`                             | Response to a save-read request.                      |
-| `loveweb:achievements:state`   | `{ unlocks: [{ key, unlockedAt, points }] }`             | Current unlock state; written to `__loveweb__/…`.     |
+| `loveweb:achievements:state`   | `{ unlocks: [{ key, unlockedAt, points }], identity }`   | Current unlock state + LÖVE identity; parent writes the file at `<save-root>/<identity>/__loveweb__/achievements.json`. |
 | `loveweb:achievement:ack`      | `{ key, fresh, points }`                                 | Confirms an unlock landed server-side.                |
+| `loveweb:saves:list`           | `{ reqId, files: [{ path, updated_at, meta? }] }`        | Response to a `loveweb:save:list` request.            |
 
 ### Runtime iframe → parent (portal)
 
@@ -837,6 +853,7 @@ table.
 | `loveweb:ready`                 | `{ game }`                                              | `love.run` is active; heartbeats start.                 |
 | `loveweb:save:write`            | `{ path, dataB64, meta }`                               | Pushes a MEMFS change to the server.                    |
 | `loveweb:save:read`             | `{ path, reqId }`                                       | Requests a cloud save file on-demand.                   |
+| `loveweb:save:list`             | `{ reqId }`                                             | Requests the full list of cloud save files for this game. Parent replies with `loveweb:saves:list`. |
 | `loveweb:log`                   | `{ level, msg }`                                        | Routed from Lua `print`/`printErr`.                     |
 | `loveweb:achievement:unlock`    | `{ key, meta }`                                         | Produced by the `[[LOVEWEB_ACH]]unlock` magic print.    |
 | `loveweb:fx`                    | `{ verb, args[] }`                                      | Produced by `[[LOVEWEB_FX]]<verb> <args...>` magic prints. Parent applies UI effects (flash, shake, mood, shatter, calm, pulsate, ripple, etc.). See **Runtime UI effects** above. |
@@ -944,8 +961,10 @@ Before any public release, run:
 node scripts/test-game-runtime.mjs public/games/your-slug/runtime
 ```
 
-This spins a headless Chromium, loads the runtime, captures 15 s of
-logs + postMessages, and exits non-zero if:
+This spins a headless browser (Chromium by default; pass `firefox` or
+`webkit` as the second arg to pick another), serves the runtime dir
+over plain HTTP, loads it, captures ~12 s of logs + postMessages, and
+exits non-zero if:
 
 - `loveweb:ready` never fires (game didn't boot),
 - any line matches `Syntax error` (Lua parse failure),
@@ -980,6 +999,15 @@ Once your game runs cleanly in the smoke test:
      year: 2026,
      repo: "your-gh-handle/your-game-repo",
      ref: "main",                  // optional; default "main"
+     identity: "your_game",        // match conf.lua t.identity exactly.
+                                   //   optional — defaults to slug with
+                                   //   dashes → underscores. Setting
+                                   //   this explicitly is required if
+                                   //   your t.identity differs from
+                                   //   that derivation (otherwise the
+                                   //   portal can't find your save dir
+                                   //   and __loveweb__/achievements.json
+                                   //   won't be reachable from Lua).
      accentColor: "#8a4fff",       // hex, used in chrome around your game
      multiplayer: "single",        // single | coop | mmo
      status: "live",               // live | beta | soon
@@ -1086,7 +1114,11 @@ end
 
 ```lua
 function love.conf(t)
-  t.identity          = "your-game"
+  -- identity must match the `identity:` field in your GameEntry PR
+  -- (or the default: your slug with dashes → underscores). Dashes
+  -- aren't allowed in Lua filesystem path conventions here — use
+  -- underscores to match the portal's default.
+  t.identity          = "your_game"
   t.version           = "11.5"
   t.console           = false
   t.window.title      = "Your Game"
@@ -1136,7 +1168,9 @@ Before you submit the PR to get listed, verify:
 - [ ] Repo is public on GitHub.
 - [ ] `main.lua` and `conf.lua` are at repo root (or `subdir` is
       explicitly set in the portal entry).
-- [ ] `conf.lua` has `t.identity` set to a stable string.
+- [ ] `conf.lua` has `t.identity` set to a stable string that **matches
+      the `identity:` field** in your portal `GameEntry` PR (or the
+      default derivation `slug.replaceAll("-", "_")`).
 - [ ] `love .` runs cleanly on desktop.
 - [ ] No `ffi`, no `love.thread`, no `love.video`, no sockets.
 - [ ] `pnpm build:games <slug>` against the portal repo compiles with no
@@ -1213,6 +1247,15 @@ Your achievement key isn't in the catalog. Verify:
 Force-refresh `/stats` — it's server-rendered with
 `cache: "no-store"`, so a hard reload is enough. If it still doesn't
 show after 30 seconds, check the browser console for POST errors.
+
+### `__loveweb__/achievements.json` is missing / empty when read from Lua
+
+The portal can't find your save dir. This happens when your
+`conf.lua` `t.identity` doesn't match the `identity` field in your
+`GameEntry` on the portal side (or doesn't match the default
+derivation of `slug.replaceAll("-", "_")`). Fix: set `identity:` in
+your `GameEntry` to exactly the value of `t.identity` in your
+`conf.lua`, ship the PR, wait for the next deploy.
 
 ### Music stops when navigating between pages
 

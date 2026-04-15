@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { sound } from "@/lib/sound";
-import { getGame } from "@/lib/games";
+import { gameIdentity, getGame } from "@/lib/games";
 import AchievementToast, { type ToastItem } from "./AchievementToast";
 import type { AchievementDef } from "@/lib/achievements";
 
@@ -40,7 +40,9 @@ export default function GameRunner({
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [exited, setExited] = useState<{ reason?: string | null; status?: number } | null>(null);
   const router = useRouter();
-  const accent = getGame(slug)?.accentColor ?? "#8a4fff";
+  const gameMeta = getGame(slug);
+  const accent = gameMeta?.accentColor ?? "#8a4fff";
+  const identity = gameMeta ? gameIdentity(gameMeta) : slug.replace(/-/g, "_");
 
   const dismissToast = useCallback((id: string) => {
     setToasts((cur) => cur.filter((t) => t.id !== id));
@@ -240,9 +242,9 @@ export default function GameRunner({
     try {
       const r = await fetch(`/api/achievements?game=${encodeURIComponent(slug)}`);
       const j = r.ok ? await r.json() : { unlocks: [] };
-      reply({ type: "loveweb:achievements:state", unlocks: (j.unlocks ?? []) as UnlockEntry[] });
+      reply({ type: "loveweb:achievements:state", unlocks: (j.unlocks ?? []) as UnlockEntry[], identity });
     } catch {
-      reply({ type: "loveweb:achievements:state", unlocks: [] });
+      reply({ type: "loveweb:achievements:state", unlocks: [], identity });
     }
     reply({ type: "loveweb:auth", signedIn });
   };
@@ -354,7 +356,7 @@ export default function GameRunner({
           try {
             const s = await fetch(`/api/achievements?game=${encodeURIComponent(slug)}`);
             const sj = s.ok ? await s.json() : { unlocks: [] };
-            reply({ type: "loveweb:achievements:state", unlocks: sj.unlocks ?? [] });
+            reply({ type: "loveweb:achievements:state", unlocks: sj.unlocks ?? [], identity });
           } catch { /* non-fatal */ }
         }
       } catch (e) {
