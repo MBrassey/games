@@ -136,39 +136,65 @@
     function log(level, msg) { parent.postMessage({ type: "loveweb:log", level, msg: String(msg) }, "*"); }
 
     // Magic-print protocol: LÖVE games push structured events to the portal
-    // by calling `print("[[LOVEWEB_ACH]]...")`. Intercepting here means the
-    // game side only needs standard Lua stdio — no Lua↔JS FFI required.
+    // by calling `print("[[LOVEWEB_...]]...")`. Intercepting at the stdout
+    // boundary means the game side only needs standard Lua stdio — no
+    // Lua↔JS FFI required.
+    //
+    // Two prefix namespaces:
+    //   [[LOVEWEB_ACH]]  — achievements
+    //   [[LOVEWEB_FX]]   — UI effects (parent overlay flashes/shakes/etc.)
     //
     // Returns true if the line was consumed (so we suppress the raw log
     // spam) or false if it should fall through to the normal log stream.
     var ACH_PREFIX = "[[LOVEWEB_ACH]]";
+    var FX_PREFIX  = "[[LOVEWEB_FX]]";
+
     function handleMagicLine(s) {
       if (typeof s !== "string") return false;
-      // The runtime's print may prefix with "stdout/stderr" etc; look for
-      // the marker anywhere in the line rather than demanding position 0.
-      var idx = s.indexOf(ACH_PREFIX);
-      if (idx < 0) return false;
-      var rest = s.slice(idx + ACH_PREFIX.length).trim();
-      var sp = rest.indexOf(" ");
-      var verb = sp < 0 ? rest : rest.slice(0, sp);
-      var tail = sp < 0 ? "" : rest.slice(sp + 1).trim();
-      if (verb === "unlock") {
-        // Tail is "<key>" or "<key> <json-blob>". JSON is optional meta.
-        var key = tail, meta = null;
-        var m = tail.match(/^(\S+)\s+(\{[\s\S]*\})$/);
-        if (m) {
-          key = m[1];
-          try { meta = JSON.parse(m[2]); } catch (e) { meta = null; }
-        }
-        if (!/^[a-z0-9_]+$/.test(key || "")) {
-          log("warn", "achievement unlock with bad key: " + key);
+
+      // Achievements ---------------------------------------------------
+      var ai = s.indexOf(ACH_PREFIX);
+      if (ai >= 0) {
+        var rest = s.slice(ai + ACH_PREFIX.length).trim();
+        var sp = rest.indexOf(" ");
+        var verb = sp < 0 ? rest : rest.slice(0, sp);
+        var tail = sp < 0 ? "" : rest.slice(sp + 1).trim();
+        if (verb === "unlock") {
+          var key = tail, meta = null;
+          var m = tail.match(/^(\S+)\s+(\{[\s\S]*\})$/);
+          if (m) {
+            key = m[1];
+            try { meta = JSON.parse(m[2]); } catch (e) { meta = null; }
+          }
+          if (!/^[a-z0-9_]+$/.test(key || "")) {
+            log("warn", "achievement unlock with bad key: " + key);
+            return true;
+          }
+          parent.postMessage({ type: "loveweb:achievement:unlock", key: key, meta: meta }, "*");
           return true;
         }
-        parent.postMessage({ type: "loveweb:achievement:unlock", key: key, meta: meta }, "*");
+        log("warn", "unknown loveweb-ach verb: " + verb);
         return true;
       }
-      log("warn", "unknown loveweb-ach verb: " + verb);
-      return true;
+
+      // UI effects -----------------------------------------------------
+      var fi = s.indexOf(FX_PREFIX);
+      if (fi >= 0) {
+        var fbody = s.slice(fi + FX_PREFIX.length).trim();
+        var fparts = fbody.split(/\s+/);
+        var fverb = fparts.shift() || "";
+        // Everything is posted raw to the parent — the parent does
+        // validation, clamping, and reduced-motion handling centrally.
+        // Keeps the per-frame runtime cost here minimal.
+        parent.postMessage({
+          type: "loveweb:fx",
+          verb: fverb,
+          args: fparts,
+        }, "*");
+        return true;
+      }
+
+      return false;
     }
 
     // Tell the parent we're alive immediately, before WASM init starts.

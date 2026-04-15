@@ -634,8 +634,12 @@ body::after {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 56px;
+  min-width: 48px;
   height: 40px;
+  /* Clip the shimmer + tame the outward text-shadow bleed so the shine
+     stays over the rank numeral itself and doesn't wash into the
+     avatar column next door. */
+  overflow: hidden;
   font-family: ui-monospace, "JetBrains Mono", monospace;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
@@ -645,10 +649,13 @@ body::after {
   font-size: 1.5rem;
   line-height: 1;
   animation: rank-podium-pulse 3s ease-in-out infinite;
+  /* Tighter glow radii — the big 28/44px halos looked gorgeous in
+     isolation but bled across the row into the avatar column. Capped
+     at ~18px so the peak stays inside the rank cell. */
   text-shadow:
-    0 0 6px var(--rank-color),
-    0 0 14px color-mix(in srgb, var(--rank-color) 60%, transparent),
-    0 0 28px color-mix(in srgb, var(--rank-color) 35%, transparent);
+    0 0 4px var(--rank-color),
+    0 0 10px color-mix(in srgb, var(--rank-color) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--rank-color) 28%, transparent);
 }
 .rank-high {
   font-size: 1.1rem;
@@ -687,16 +694,16 @@ body::after {
   0%, 100% {
     transform: scale(1);
     text-shadow:
-      0 0 6px  var(--rank-color),
-      0 0 14px color-mix(in srgb, var(--rank-color) 55%, transparent),
-      0 0 28px color-mix(in srgb, var(--rank-color) 30%, transparent);
+      0 0 4px  var(--rank-color),
+      0 0 10px color-mix(in srgb, var(--rank-color) 55%, transparent),
+      0 0 18px color-mix(in srgb, var(--rank-color) 28%, transparent);
   }
   50% {
-    transform: scale(1.06);
+    transform: scale(1.04);
     text-shadow:
-      0 0 10px var(--rank-color),
-      0 0 22px color-mix(in srgb, var(--rank-color) 75%, transparent),
-      0 0 44px color-mix(in srgb, var(--rank-color) 45%, transparent);
+      0 0 6px  var(--rank-color),
+      0 0 14px color-mix(in srgb, var(--rank-color) 70%, transparent),
+      0 0 26px color-mix(in srgb, var(--rank-color) 40%, transparent);
   }
 }
 
@@ -828,4 +835,227 @@ button.panel:hover {
 @media (prefers-reduced-motion: reduce) {
   .card-spotlight::before { transition: none; }
   .chat-msg[data-fresh="true"] { animation: none; }
+}
+
+/* ============================================================
+   Game → UI FX
+   ============================================================
+   Runtime-applied portal chrome modulation. Effects originate
+   from the game via a magic-print protocol (see INTEGRATION.md
+   → "Runtime UI effects") and are applied by the UiEffects
+   client component.
+
+   Design:
+     • FX layers stack inside #ui-fx-layers at z:9998 with
+       pointer-events:none so gameplay focus is never stolen.
+     • The shake/zoom root (#ui-shake) wraps the page content
+       and consumes --shake-x/y + --zoom-scale CSS variables so
+       transforms compose cleanly — shake + zoom simultaneously
+       work without re-entry.
+     • Invert, chroma, flicker, and scanlines ride on classes
+       applied to <body> (easy to override during gameplay and
+       scoped globally).
+     • Every animated effect has a prefers-reduced-motion
+       bailout at the bottom of this section. */
+
+#ui-shake {
+  transform: translate3d(var(--shake-x, 0px), var(--shake-y, 0px), 0)
+             scale(var(--zoom-scale, 1));
+  will-change: transform;
+  transform-origin: center center;
+}
+
+#ui-fx-glow {
+  box-shadow:
+    inset 0 0 calc(60px * var(--glow-intensity, 0.4))
+      color-mix(in srgb, var(--glow-color, #8a4fff) 60%, transparent),
+    inset 0 0 calc(180px * var(--glow-intensity, 0.4))
+      color-mix(in srgb, var(--glow-color, #8a4fff) 25%, transparent);
+}
+
+#ui-fx-vignette {
+  background: radial-gradient(
+    ellipse at center,
+    transparent 40%,
+    rgba(0, 0, 0, 0.85) 100%
+  );
+}
+
+#ui-fx-calm {
+  background: radial-gradient(
+    ellipse at 50% 55%,
+    color-mix(in srgb, var(--calm-color, #66e0ff) 45%, transparent) 0%,
+    color-mix(in srgb, var(--calm-color, #66e0ff) 18%, transparent) 35%,
+    transparent 70%
+  );
+  mix-blend-mode: screen;
+  animation: fx-calm-breathe 7s ease-in-out infinite;
+}
+@keyframes fx-calm-breathe {
+  0%, 100% { transform: scale(1);    filter: blur(0px); }
+  50%      { transform: scale(1.04); filter: blur(4px); }
+}
+
+#ui-fx-pulsate {
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--pulsate-color, #ff3366) 40%, transparent) 0%,
+    color-mix(in srgb, var(--pulsate-color, #ff3366) 8%, transparent) 40%,
+    transparent 75%
+  );
+}
+@keyframes fx-pulsate {
+  0%, 100% { opacity: 0.15; transform: scale(1); }
+  50%      { opacity: var(--pulsate-peak, 0.6); transform: scale(1.03); }
+}
+
+/* Single-pass center-out ring — triggered per call via class toggle. */
+#ui-fx-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 0 solid var(--pulse-color, #8a4fff);
+  border-radius: 50%;
+  opacity: 0;
+  box-shadow: 0 0 0 0 var(--pulse-color, #8a4fff);
+  margin: auto;
+  width: 12px;
+  height: 12px;
+}
+#ui-fx-pulse.fx-pulse-run::after {
+  animation: fx-pulse-expand var(--pulse-duration, 600ms) cubic-bezier(0.2, 0, 0.2, 1) forwards;
+}
+@keyframes fx-pulse-expand {
+  0%   {
+    opacity: 0.85;
+    width: 12px; height: 12px;
+    border-width: 3px;
+    box-shadow: 0 0 20px 4px var(--pulse-color, #8a4fff);
+  }
+  100% {
+    opacity: 0;
+    width: min(140vw, 140vh); height: min(140vw, 140vh);
+    border-width: 1px;
+    box-shadow: 0 0 60px 2px var(--pulse-color, #8a4fff);
+  }
+}
+
+/* Ripple — dynamic element, detached on animationend. Multiple can
+   overlap without fighting for the same pseudo. */
+.fx-ripple {
+  position: absolute;
+  left: var(--rx, 50%);
+  top: var(--ry, 50%);
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  border: 2px solid var(--ripple-color, #66e0ff);
+  box-shadow: 0 0 22px var(--ripple-color, #66e0ff);
+  opacity: 0.95;
+  mix-blend-mode: screen;
+  animation: fx-ripple-expand 900ms cubic-bezier(0.22, 0.9, 0.2, 1) forwards;
+}
+@keyframes fx-ripple-expand {
+  0% {
+    transform: scale(1);
+    opacity: 0.95;
+    border-width: 3px;
+  }
+  60% {
+    opacity: 0.5;
+    border-width: 2px;
+  }
+  100% {
+    transform: scale(80);
+    opacity: 0;
+    border-width: 1px;
+  }
+}
+
+/* Shatter — SVG crack overlay + high-intensity transient. The lines are
+   drawn via background-image + clip-path tricks so we don't ship an
+   actual SVG asset (the keyframe takes care of the fade). */
+.fx-shatter {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  background:
+    linear-gradient(100deg, transparent 48%, rgba(255,243,200,0.7) 49.5%, transparent 51%) 0 0 / 100% 100%,
+    linear-gradient(20deg,  transparent 48%, rgba(255,243,200,0.5) 49.5%, transparent 51%) 0 0 / 100% 100%,
+    linear-gradient(-40deg, transparent 48%, rgba(255,243,200,0.55) 49.5%, transparent 51%) 0 0 / 100% 100%,
+    linear-gradient(70deg,  transparent 48%, rgba(255,243,200,0.4) 49.5%, transparent 51%) 0 0 / 100% 100%,
+    linear-gradient(-80deg, transparent 48%, rgba(255,243,200,0.45) 49.5%, transparent 51%) 0 0 / 100% 100%;
+  background-blend-mode: screen;
+  opacity: 0;
+  animation: fx-shatter 650ms cubic-bezier(0.2, 0, 0.3, 1) forwards;
+}
+@keyframes fx-shatter {
+  0%   { opacity: 0;    filter: blur(8px); }
+  8%   { opacity: calc(0.7 + 0.25 * var(--shatter-intensity, 0.8)); filter: blur(0); }
+  55%  { opacity: calc(0.4 + 0.15 * var(--shatter-intensity, 0.8)); }
+  100% { opacity: 0; }
+}
+
+/* Invert — a full-viewport inverted colour pass. Applied to #ui-shake
+   (not <body>) so the fixed FX overlay layers stay uninverted and don't
+   flip the color we just painted. */
+body.fx-invert #ui-shake {
+  filter: invert(1) hue-rotate(180deg);
+  transition: filter 80ms linear;
+}
+
+/* Chromatic aberration: stacked shadows split red/blue on the shake
+   root for a cheap, GPU-friendly RGB-split without needing an SVG
+   filter chain. Intensity scales the offset. */
+body.fx-chroma #ui-shake {
+  filter:
+    drop-shadow(calc(var(--chroma-intensity, 0.5) * 6px)  0 rgba(255, 40, 80, 0.55))
+    drop-shadow(calc(var(--chroma-intensity, 0.5) * -6px) 0 rgba(40, 160, 255, 0.55));
+  transition: filter 60ms linear;
+}
+
+/* Flicker — cheap brightness jitter via CSS animation. Random-enough
+   via multi-step keyframes that it reads as analog interference. */
+body.fx-flicker #ui-shake {
+  animation: fx-flicker 90ms steps(2, end) infinite;
+}
+@keyframes fx-flicker {
+  0%   { filter: brightness(calc(1 - var(--flicker-amp, 0.3))); }
+  25%  { filter: brightness(calc(1 + var(--flicker-amp, 0.3))); }
+  40%  { filter: brightness(1); }
+  55%  { filter: brightness(calc(1 - var(--flicker-amp, 0.3) * 0.6)); }
+  75%  { filter: brightness(calc(1 + var(--flicker-amp, 0.3) * 0.7)); }
+  100% { filter: brightness(1); }
+}
+
+/* Scanline surge — modulates the existing body::before CRT scanline
+   overlay. We re-declare the rule with a surge-aware opacity when the
+   class is applied. */
+body.fx-scanlines-surge::before {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, calc(0.025 + 0.25 * var(--scanlines-surge, 0.6))) 0,
+    rgba(255, 255, 255, calc(0.025 + 0.25 * var(--scanlines-surge, 0.6))) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  transition: background-image 120ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #ui-fx-calm,
+  #ui-fx-pulsate,
+  #ui-fx-pulse.fx-pulse-run::after,
+  .fx-ripple,
+  .fx-shatter,
+  body.fx-flicker #ui-shake,
+  body.fx-chroma #ui-shake,
+  body.fx-invert #ui-shake {
+    animation: none !important;
+    transition: none !important;
+    filter: none !important;
+  }
 }

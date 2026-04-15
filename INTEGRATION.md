@@ -42,7 +42,8 @@ a sharp-edges list and a copy-paste starter skeleton.
 10. [Player identity](#player-identity)
 11. [Networking, threads, video](#networking-threads-video)
 12. [Achievements](#achievements)
-13. [Bridge protocol reference](#bridge-protocol-reference)
+13. [Runtime UI effects](#runtime-ui-effects)
+14. [Bridge protocol reference](#bridge-protocol-reference)
 14. [Debugging — getting logs out of the iframe](#debugging--getting-logs-out-of-the-iframe)
 15. [Local development loop](#local-development-loop)
 16. [Smoke testing](#smoke-testing)
@@ -675,6 +676,142 @@ responding to it is orthogonal.
 
 ---
 
+## Runtime UI effects
+
+Your game can reach out and affect the surrounding portal chrome — the
+topbar, the chat drawer, the background, the whole viewport — as if
+the cabinet itself is responding to gameplay. This is what makes a
+boss fight feel *weighty*: a ripple on a staff slam, a shatter on
+death, a persistent blood-red mood during an encounter, a slow
+soothing glow when the player reaches a sanctuary.
+
+It's all declarative. Emit one magic-print line per effect:
+
+```lua
+print("[[LOVEWEB_FX]]flash #ff6699 300")
+print("[[LOVEWEB_FX]]shake 0.8 400")
+print("[[LOVEWEB_FX]]mood #ff3366 0.2")
+print("[[LOVEWEB_FX]]shatter 1.0 650")
+```
+
+No JS interop. No portal API calls. The runtime shell intercepts the
+line (same path as `[[LOVEWEB_ACH]]unlock`), strips it from the log
+stream, and posts it to the parent, which applies the effect.
+
+### Catalog
+
+| Verb        | Args                                        | What it does                                                                                                                |
+|-------------|---------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `flash`     | `<color> <ms> [intensity]`                  | One-shot screen flash. Fades over `ms`. Default intensity 0.6.                                                              |
+| `shake`     | `<intensity> <ms>`                          | Shakes the entire UI wrapper with a dampened random oscillation. Intensity 0..1. Starfield stays still — the cabinet rattles. |
+| `invert`    | `<ms>`                                      | Inverts viewport colors for `ms`. Great on death.                                                                           |
+| `tint`      | `<color> <alpha> <ms>`                      | Color wash over the viewport. Fades out.                                                                                    |
+| `mood`      | `<color> <intensity>`                       | **Persistent.** Ambient tint that breathes. Clear with `mood none`.                                                         |
+| `calm`      | `<color> <intensity>`                       | **Persistent.** Soft radial soothing glow from center. Meditative — reads as a sanctuary, not an alarm. Clear with `calm none`. |
+| `pulsate`   | `<color> <bpm> <intensity>`                 | **Persistent.** Rhythmic heartbeat throb at `bpm` (20–200). Clear with `pulsate off`.                                       |
+| `pulse`     | `<color> <ms>`                              | Expanding ring out from viewport center. One-shot.                                                                          |
+| `ripple`    | `<color> <x%> <y%> <ms>`                    | Concentric wave expanding from an origin point (0..1 percent). Multiple can overlap.                                        |
+| `glow`      | `<color> <intensity> <ms>`                  | Edge-lit halo, inset into the viewport rim. Fades out.                                                                      |
+| `chroma`    | `<intensity> <ms>`                          | Brief chromatic aberration / RGB-split.                                                                                     |
+| `vignette`  | `<intensity> <ms>`                          | Darkens the viewport edges for `ms`.                                                                                        |
+| `shatter`   | `<intensity> <ms>`                          | The big one. Composite: flash + chroma + shake + a glass-crack overlay. Use sparingly — for death, defeat, catastrophic hits. |
+| `flicker`   | `<intensity> <ms>`                          | Brightness flicker — reads as transmission interference.                                                                    |
+| `zoom`      | `<amount> <ms>`                             | Brief scale push/pull on the UI. Amount is -0.1..0.1 (negative = zoom out).                                                 |
+| `scanlines` | `<intensity> <ms>`                          | Intensifies the ambient CRT scanline overlay.                                                                               |
+
+### Colors
+
+Any valid CSS color string works:
+
+- Hex: `#ff6699`, `#f39`, `#ff6699cc`
+- `rgb()`, `rgba()`, `hsl()`, `hsla()`
+- Named colors: `red`, `cyan`, `crimson`
+
+Invalid colors fall back to a neutral portal purple — your game won't
+crash the portal over a typo.
+
+### Patterns
+
+```lua
+-- Hit feedback (light)
+print("[[LOVEWEB_FX]]flash #ffffff 120 0.35")
+print("[[LOVEWEB_FX]]shake 0.25 180")
+
+-- Critical hit
+print("[[LOVEWEB_FX]]flash #ffdd66 220 0.7")
+print("[[LOVEWEB_FX]]chroma 0.6 180")
+print("[[LOVEWEB_FX]]shake 0.55 260")
+
+-- Player death
+print("[[LOVEWEB_FX]]shatter 1.0 800")
+print("[[LOVEWEB_FX]]invert 200")
+print("[[LOVEWEB_FX]]mood #330011 0.35")   -- lingers until cleared
+
+-- Boss encounter start
+print("[[LOVEWEB_FX]]mood #6a0a28 0.3")
+print("[[LOVEWEB_FX]]pulsate #ff3366 72 0.35")  -- 72 BPM menacing heartbeat
+print("[[LOVEWEB_FX]]vignette 0.5 900")
+
+-- Boss encounter end / sanctuary / save point
+print("[[LOVEWEB_FX]]mood none")
+print("[[LOVEWEB_FX]]pulsate off")
+print("[[LOVEWEB_FX]]calm #66e0ff 0.35")        -- soothing meditation glow
+print("[[LOVEWEB_FX]]pulse #66e0ff 900")
+
+-- Elemental impact at a specific on-screen point
+-- (x and y are 0..1 fractions of the viewport)
+print("[[LOVEWEB_FX]]ripple #66e0ff 0.5 0.4 900")
+print("[[LOVEWEB_FX]]ripple #66e0ff 0.5 0.4 1400")  -- stacking = thicker wave
+
+-- "Game is glitching out"
+print("[[LOVEWEB_FX]]flicker 0.7 240")
+print("[[LOVEWEB_FX]]chroma 0.8 200")
+print("[[LOVEWEB_FX]]scanlines 0.9 400")
+
+-- Subtle mood shift as night falls
+print("[[LOVEWEB_FX]]mood #1a0833 0.12")
+```
+
+### Safety rails (what the portal does for you)
+
+You cannot break the portal with FX:
+
+- **Duration is clamped** to 2.5 s max. A game can't hold the UI in
+  a permanent flash.
+- **Intensity is clamped** to 0..1 everywhere.
+- **Anti-strobe floors**: consecutive `flash` or `invert` calls inside
+  140–180 ms get merged/dropped so a bug in your update loop can't
+  turn the viewport into a strobe.
+- **BPM is clamped** to 20–200 for `pulsate`.
+- **Colors are sanitized** — malformed color strings fall back.
+- **`prefers-reduced-motion`** users get color-only effects at reduced
+  intensity; shake, flash, invert, chroma, flicker, pulse, ripple,
+  shatter, and zoom are all skipped for them. Your FX script runs the
+  same; only the *visible* output is different.
+- **Pointer-events-none overlay** — FX can never steal clicks from the
+  player.
+- **Forward compatible** — unknown verbs are silently ignored. New
+  portal features won't break older games; older games can't emit
+  verbs that don't exist yet.
+
+### Verifying from the console
+
+Every running portal page exposes `window.__portalFx(verb, ...args)`
+so you can exercise effects from the browser devtools without a
+running game. Examples:
+
+```js
+__portalFx("flash", "#ff6699", "300")
+__portalFx("shatter", "1", "700")
+__portalFx("mood", "#330011", "0.4")
+__portalFx("calm", "#66e0ff", "0.4")
+__portalFx("pulsate", "#ff3366", "60", "0.35")
+__portalFx("ripple", "#ffffff", "0.5", "0.5", "1200")
+```
+
+Use this to explore what your effect palette *feels* like before
+wiring it into your game loop.
+
 ## Bridge protocol reference
 
 You don't usually need this — the achievement magic-print and
@@ -702,6 +839,7 @@ table.
 | `loveweb:save:read`             | `{ path, reqId }`                                       | Requests a cloud save file on-demand.                   |
 | `loveweb:log`                   | `{ level, msg }`                                        | Routed from Lua `print`/`printErr`.                     |
 | `loveweb:achievement:unlock`    | `{ key, meta }`                                         | Produced by the `[[LOVEWEB_ACH]]unlock` magic print.    |
+| `loveweb:fx`                    | `{ verb, args[] }`                                      | Produced by `[[LOVEWEB_FX]]<verb> <args...>` magic prints. Parent applies UI effects (flash, shake, mood, shatter, calm, pulsate, ripple, etc.). See **Runtime UI effects** above. |
 | `loveweb:quit`                  | `{ status, reason }`                                    | Clean-exit signal — emitted by the runtime shell when `love.event.quit()` flows through Module.quit / onExit. Parent overlays a "session ended" card and routes back to the library. |
 
 From Lua you interact with this protocol via:
