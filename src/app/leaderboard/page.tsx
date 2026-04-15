@@ -85,7 +85,7 @@ export default async function LeaderboardPage() {
           ) : (
             <div className="panel overflow-hidden">
               {/* header row */}
-              <div className="grid grid-cols-[68px_1fr_92px_68px_60px_60px_88px_68px_92px] items-center gap-3 px-4 py-2 border-b border-eldritch-deep/60 bg-void-1/60 text-[0.6rem] uppercase tracking-[0.25em] text-bone/45">
+              <div className="grid grid-cols-[56px_1fr_92px_68px_60px_60px_88px_68px_92px] items-center gap-3 px-4 py-2 border-b border-eldritch-deep/60 bg-void-1/60 text-[0.6rem] uppercase tracking-[0.25em] text-bone/45">
                 <span>rank</span>
                 <span>operator</span>
                 <span className="text-right">playtime</span>
@@ -107,7 +107,7 @@ export default async function LeaderboardPage() {
                 return (
                   <div
                     key={r.userId}
-                    className={`grid grid-cols-[68px_1fr_92px_68px_60px_60px_88px_68px_92px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-eldritch-purple/5 ${
+                    className={`grid grid-cols-[56px_1fr_92px_68px_60px_60px_88px_68px_92px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-eldritch-purple/5 ${
                       i % 2 === 0 ? "bg-eldritch-deep/10" : ""
                     } ${isMe ? "ring-1 ring-inset ring-abyss-cyan/40" : ""}`}
                   >

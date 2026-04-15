@@ -389,6 +389,28 @@ required on the game side. An always-visible "↩ exit" handle over the
 top-right of the iframe (plus a full button in the status bar) serves as
 a hard escape hatch if the Lua runtime itself has frozen.
 
+### Game → UI effects
+
+Games can reach out and modulate the surrounding portal chrome (topbar,
+chat drawer, whole viewport) via a second magic-print namespace:
+`print("[[LOVEWEB_FX]]<verb> <args...>")`. The `UiEffects` component
+(mounted at the root layout) subscribes and applies the effects to a
+stack of fixed overlays + a shake/zoom transform wrapper. Verbs include:
+
+- **flash · shake · invert · chroma · flicker · zoom · scanlines** —
+  one-shot dramatic modulations.
+- **tint · vignette · glow · pulse · ripple** — one-shot with fade.
+- **mood · calm · pulsate** — persistent states (boss fight, sanctuary,
+  heartbeat) with explicit `off` / `none` clearing.
+- **shatter** — composite flash + chroma + shake + glass-crack overlay
+  for death / defeat beats.
+
+All effects are duration-clamped (≤2.5 s), intensity-clamped (0..1),
+anti-strobe-floored, pointer-events-none, and honor
+`prefers-reduced-motion`. Every page exposes `window.__portalFx(verb,
+...args)` for devtools verification. Full author-facing docs:
+[INTEGRATION.md → Runtime UI effects](./INTEGRATION.md#runtime-ui-effects).
+
 The `GameRunner` React component holds the parent side of the bridge in
 `src/components/GameRunner.tsx`.
 
