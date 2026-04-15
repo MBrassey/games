@@ -41,14 +41,24 @@ export async function POST(req: Request) {
     kind: "chat",
   };
 
+  // KV fanout — best-effort. If Upstash is rate-limited / down / not
+  // configured, we still persist to Postgres (above) and return the
+  // message. The stream route has a Postgres fallback, so delivery is
+  // still guaranteed; it just won't be as snappy as the KV-backed path.
+  //
+  // Previously KV failures threw 500 up to the client, which looked like
+  // "send doesn't work" even though the message was saved — the UI saw
+  // a non-ok response, never appended the message locally, and the SSE
+  // stream couldn't broadcast it either.
   const kv = getKv();
   if (kv) {
-    // @vercel/kv auto-JSON-serializes on write and auto-parses on read, so
-    // we push the object directly (passing a pre-stringified string would
-    // still be valid but the stream route below expects the parsed object).
-    await kv.lpush(`stream:${b.channel}`, msg);
-    await kv.ltrim(`stream:${b.channel}`, 0, 199);
-    await kv.incr(`seq:${b.channel}`);
+    try {
+      await kv.lpush(`stream:${b.channel}`, msg);
+      await kv.ltrim(`stream:${b.channel}`, 0, 199);
+      await kv.incr(`seq:${b.channel}`);
+    } catch (e) {
+      console.warn("[chat/send] KV fanout failed:", (e as Error)?.message);
+    }
   }
   return NextResponse.json({ ok: true, message: msg });
 }
