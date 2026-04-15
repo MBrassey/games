@@ -27,59 +27,216 @@
 
 type Ctx = AudioContext;
 
-// --- music generator ---
+// --- procedural music composer ---
 //
-// Procedural ambient score that reads as actual music, not drone: pad
-// chords moving through a minor progression, a pentatonic lead that
-// arpeggiates over them, a sub-bass pulse on every bar, and rare
-// filtered-noise hits for texture. Scheduler uses the Web Audio clock so
-// timing stays rock solid regardless of browser/tab throttling.
+// Goal: a continuous, evolving, non-repeating score in D dorian that
+// sounds like an actual hand-played lounge session, not a drone. We
+// generate material at three time-scales:
+//
+//   1. Per bar — a Markov-walk chord function (i / ii / III / IV / v /
+//      vi / VII), a randomly-chosen voicing out of 4 shapes, a bass
+//      pattern out of 5 shapes, an arpeggio phrase out of 5 shapes.
+//   2. Per 16-bar section — a "density" curve orchestrating which
+//      voices are active (sparse intros with just pad+bass, denser
+//      B sections with arpeggio + backbeat + occasional lead melody,
+//      peak C sections adding sparkle sprays).
+//   3. Per 4-bar phrase — a lead melody fragment improvised from the
+//      current chord's scale, phrased around chord tones on downbeats
+//      and passing tones off the beat.
+//
+// Nothing is a fixed loop. The Markov walker prefers tasteful
+// resolutions (IV→VII→III, ii→v→i, VII→III turnarounds) but
+// surprises the ear often enough that no 8-bar phrase ever feels
+// identical to a past one.
+//
+// Swing eighths (~16% delay on offbeat), ~96 bpm. Scheduler is still
+// the Web Audio clock; everything below is the material generator.
 
-// Spaceship-casino ambience. Brighter than minor-brood: a lo-fi lounge
-// groove in D dorian with jazzy 9/11 colour tones, walking bass, vibraphone
-// arpeggios and the occasional bright chime. ~96 bpm, swung feel.
 const BPM = 96;
 const BEAT = 60 / BPM;
 const STEP = BEAT / 2;
 
-// ii–V–I-ish in D dorian with a cheeky chromatic twist. Each chord: bar
-// worth of harmony + a bass-line quarter-note pattern over the bar.
-// Frequencies are already calculated so we don't do math at schedule time.
-const CHORDS: {
-  name: string;
-  pad: number[];          // sustained chord voicing
-  bassWalk: number[];     // 4 quarter-note bass notes
-  scale: number[];        // pitches the lead arpeggio pulls from
-}[] = [
-  {
-    // Dm9 — D F A C E
-    name: "Dm9",
-    pad: [146.83, 220.0, 261.63, 329.63, 440.0],
-    bassWalk: [73.42, 82.41, 98.0, 110.0], // D2 E2 G2 A2
-    scale: [293.66, 329.63, 349.23, 392.0, 440.0, 523.25, 587.33, 659.25],
-  },
-  {
-    // G13 — G B D F E  (dominant, bright)
-    name: "G13",
-    pad: [196.0, 246.94, 293.66, 349.23, 440.0],
-    bassWalk: [98.0, 110.0, 123.47, 130.81], // G2 A2 B2 C3
-    scale: [293.66, 349.23, 392.0, 440.0, 493.88, 587.33, 659.25, 698.46],
-  },
-  {
-    // Cmaj9 — C E G B D
-    name: "Cmaj9",
-    pad: [130.81, 196.0, 246.94, 293.66, 329.63],
-    bassWalk: [65.41, 73.42, 82.41, 98.0], // C2 D2 E2 G2
-    scale: [261.63, 293.66, 329.63, 392.0, 440.0, 493.88, 523.25, 587.33],
-  },
-  {
-    // Am11 — A C E G D (cool landing, not resolved)
-    name: "Am11",
-    pad: [110.0, 164.81, 220.0, 261.63, 392.0],
-    bassWalk: [82.41, 98.0, 110.0, 123.47], // E2 G2 A2 B2
-    scale: [220.0, 261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33],
-  },
+// D dorian scale root + semitone intervals.
+// Scale degrees: 0=D, 1=E, 2=F, 3=G, 4=A, 5=B, 6=C (then repeats).
+const DORIAN_BASE_HZ = 146.83; // D3
+const DORIAN_STEPS = [0, 2, 3, 5, 7, 9, 10];
+
+// Turn a signed scale-degree index (0 = D3, 7 = D4, -7 = D2, etc.)
+// into a frequency. Used everywhere below so we never hand-type hertz.
+function degHz(d: number): number {
+  const mod = ((d % 7) + 7) % 7;
+  const oct = Math.floor(d / 7);
+  return DORIAN_BASE_HZ * Math.pow(2, (DORIAN_STEPS[mod] + oct * 12) / 12);
+}
+
+// Seven diatonic chord functions plus one borrowed bII for color.
+// Each entry is: root scale-degree + the tones (as scale-degree offsets
+// from the root) that can appear in a voicing. The voicing picker then
+// chooses which tones to actually sound.
+type ChordFn = {
+  root: number;               // scale degree (0..6) of the root
+  tones: number[];            // offsets from root (scale steps): 0=root, 2=3rd, 4=5th, 6=7th, 8=9th, 10=11th, 12=13th
+  quality: "min" | "maj" | "dim" | "dom";
+};
+const FNS: Record<string, ChordFn> = {
+  i:   { root: 0, tones: [0, 2, 4, 6, 8],     quality: "min" }, // Dm9
+  ii:  { root: 1, tones: [0, 2, 4, 6, 8],     quality: "min" }, // Em11
+  III: { root: 2, tones: [0, 2, 4, 6, 8],     quality: "maj" }, // Fmaj9
+  IV:  { root: 3, tones: [0, 2, 4, 6, 8, 10], quality: "dom" }, // G13
+  v:   { root: 4, tones: [0, 2, 4, 6, 8],     quality: "min" }, // Am11
+  vi:  { root: 5, tones: [0, 2, 4, 6],        quality: "dim" }, // Bm7b5
+  VII: { root: 6, tones: [0, 2, 4, 6, 8],     quality: "maj" }, // Cmaj9
+};
+
+// Markov transitions — weights hand-tuned so cycle-of-fourths motion
+// and deceptive cadences both show up regularly, while consecutive
+// duplicates stay rare. Each entry: [next function, weight].
+const TRANSITIONS: Record<string, [string, number][]> = {
+  i:   [["IV", 3.0], ["VII", 2.4], ["v", 1.8], ["ii", 1.5], ["III", 1.2], ["vi", 0.6], ["i", 0.4]],
+  ii:  [["v", 3.0], ["IV", 2.0], ["VII", 1.8], ["i", 1.4], ["III", 1.0], ["ii", 0.3]],
+  III: [["IV", 2.2], ["VII", 2.2], ["i", 1.8], ["ii", 1.0], ["vi", 0.8], ["III", 0.3]],
+  IV:  [["VII", 2.8], ["III", 2.0], ["i", 1.8], ["ii", 1.4], ["v", 1.0], ["IV", 0.3]],
+  v:   [["i", 3.0], ["IV", 1.6], ["VII", 1.4], ["ii", 1.2], ["III", 1.0], ["v", 0.3]],
+  vi:  [["v", 2.4], ["VII", 2.0], ["ii", 1.4], ["i", 1.8], ["III", 0.6]],
+  VII: [["III", 2.6], ["i", 2.4], ["IV", 1.8], ["vi", 1.0], ["ii", 1.0], ["VII", 0.3]],
+};
+
+function pickWeighted<T>(opts: [T, number][], rnd: () => number): T {
+  let total = 0;
+  for (const [, w] of opts) total += w;
+  let r = rnd() * total;
+  for (const [v, w] of opts) { r -= w; if (r <= 0) return v; }
+  return opts[opts.length - 1][0];
+}
+
+// Instantiate a chord into concrete sounding material for one bar.
+// `voicingId` picks which tones go into which octaves; the different
+// voicings (close / spread / quartal / rootless) keep successive bars
+// from sounding identical even if the Markov walker revisits a chord.
+type BarMaterial = {
+  fnName: string;
+  root: number;                 // scale degree (0..6)
+  padNotes: number[];           // frequencies
+  scaleHz: number[];            // 8 scale tones in two-octave window
+  scaleDeg: number[];           // matching scale-degree seeds for lead
+  quality: ChordFn["quality"];
+};
+
+function voiceChord(fnName: string, voicingId: number): BarMaterial {
+  const fn = FNS[fnName] || FNS.i;
+  const root = fn.root;
+
+  // Build the chord tones at absolute scale-degree positions.
+  // tones[i] are degree offsets from root (0=root, 2=3rd, etc.)
+  const absTones = fn.tones.map((t) => root + t);
+
+  let pad: number[];
+  switch (voicingId % 4) {
+    case 0: // Close voicing from octave 0-1
+      pad = absTones.slice(0, 5).map((d) => degHz(d));
+      break;
+    case 1: // Spread — root in octave -1, rest in 1
+      pad = [
+        degHz(absTones[0] - 7),
+        ...absTones.slice(1, 5).map((d) => degHz(d + 7)),
+      ];
+      break;
+    case 2: // Quartal — stack fourths from the root
+      pad = [0, 3, 6, 9, 12].map((i) => degHz(absTones[0] + i));
+      break;
+    case 3: // Rootless — drop the root, emphasize 3 / 7 / 9 / 11 / 13
+    default:
+      pad = absTones.slice(1).map((d) => degHz(d + 7));
+      break;
+  }
+
+  // Two-octave scale window anchored around the chord root, shifted
+  // upward to keep the lead in a bright register.
+  const scaleDeg: number[] = [];
+  for (let i = 0; i < 8; i++) scaleDeg.push(root + 7 + i); // +7 = one octave up
+  const scaleHz = scaleDeg.map((d) => degHz(d));
+
+  return { fnName, root, padNotes: pad, scaleHz, scaleDeg, quality: fn.quality };
+}
+
+// Bass walks: 4 quarter-notes per bar. Returned as scale-degree
+// indices so we can compute frequencies with chord context at
+// schedule time.
+type BassPattern = "desc7" | "asc7" | "pedal" | "chromatic" | "scalar";
+const BASS_PATTERNS: [BassPattern, number][] = [
+  ["desc7", 2], ["asc7", 1.6], ["pedal", 1], ["chromatic", 1.4], ["scalar", 1.5],
 ];
+function bassWalk(root: number, pat: BassPattern, nextRoot: number): number[] {
+  const r = root - 14; // 2 octaves below the lead window
+  switch (pat) {
+    case "desc7":     return [r, r + 6, r + 4, r + 2];
+    case "asc7":      return [r, r + 2, r + 4, r + 6];
+    case "pedal":     return [r, r + 4, r, r + 4];
+    case "scalar":    return [r, r + 1, r + 2, r + 3];
+    case "chromatic": {
+      // End with a chromatic approach into the next chord's root.
+      const approach = (nextRoot - 14) - 1; // one semitone below (approximate via scalar-1)
+      return [r, r + 4, r + 2, approach];
+    }
+  }
+}
+
+// Arpeggio phrases — 8-step patterns, indices into the scale window.
+// `null` = rest (breathing space).
+type ArpPhrase = (number | null)[];
+const ARP_PHRASES: [ArpPhrase, number][] = [
+  [[0, 2, 4, null, 3, 5, 2, null], 2.0],
+  [[0, 4, 2, null, 5, 3, 7, null], 1.6],
+  [[0, 2, null, 4, null, 3, 5, null], 1.2],
+  [[null, 2, 4, 0, null, 3, 5, 2], 1.4],
+  [[0, 2, 4, 2, null, 3, null, 5], 1.0],
+  [[0, null, 4, null, 3, null, 5, null], 0.8],
+];
+
+// Generate a sparse improvised 4-bar melody over the chord. Returns a
+// list of (step-in-4-bar-phrase, scale-degree-above-root, duration) —
+// the scheduler places each against real ctx time when the right step
+// lands. Notes land on strong beats biased toward chord tones; off-beat
+// notes weight toward passing tones (odd scale degrees).
+//
+// Density shapes how many notes appear (3..6) and how adventurous the
+// intervals get. Phrase length is 32 steps (4 bars × 8 eighths).
+function generateLeadPhrase(
+  mat: BarMaterial,
+  density: number,
+  rnd: () => number
+): Array<{ at: number; deg: number; dur: number }> {
+  const notes: Array<{ at: number; deg: number; dur: number }> = [];
+  // Chord tones (deg offsets from the bar's root, one octave above).
+  const chordDegs = [0, 2, 4, 6];
+  const passing = [1, 3, 5];
+  const count = 3 + Math.floor(rnd() * (density > 0.8 ? 4 : 3)); // 3..5 (or 6 at peak)
+
+  // Reserve spots: one on bar 1 beat 1, one on bar 3 beat 1, rest scattered.
+  const reserved = [0, 16];
+  const scattered: number[] = [];
+  while (scattered.length < count - reserved.length) {
+    const step = Math.floor(rnd() * 32);
+    if (scattered.includes(step) || reserved.includes(step)) continue;
+    scattered.push(step);
+  }
+  const slots = [...reserved, ...scattered].sort((a, b) => a - b);
+
+  for (const at of slots) {
+    const onStrong = at % 4 === 0;
+    const pool = onStrong ? chordDegs : (rnd() < 0.65 ? chordDegs : passing);
+    let deg = pool[Math.floor(rnd() * pool.length)];
+    // Occasional octave jump or chromatic neighbor for color.
+    if (rnd() < 0.12) deg += 7;
+    if (rnd() < 0.08) deg -= 1;
+    // Duration: mostly eighths, sometimes dotted-eighths, rare
+    // quarter-and-a-half for held phrase endings.
+    const durRoll = rnd();
+    const durSteps = durRoll < 0.65 ? 1 : durRoll < 0.9 ? 1.5 : 3;
+    notes.push({ at, deg, dur: durSteps });
+  }
+  return notes;
+}
 
 class SoundEngine {
   private ctx: Ctx | null = null;
@@ -409,45 +566,149 @@ class SoundEngine {
     }
   }
 
-  // Scheduling unit: one eighth note. Bar = 8 steps. Each step may fire a
-  // pad, a walking-bass note, a vibraphone arpeggio note, a brushed-snare
-  // tick, and an occasional glockenspiel sparkle.
+  // --- composer state ---
+  // Reset when the engine starts fresh; persists across bars so each
+  // new bar is "next" in a sequence rather than a cold draw.
+  private composer = {
+    fnName: "i" as string,
+    lastFn: "" as string,
+    material: null as BarMaterial | null,
+    nextMaterial: null as BarMaterial | null,
+    bassPattern: "desc7" as BassPattern,
+    arpPhrase: ARP_PHRASES[0][0] as ArpPhrase,
+    sectionBar: 0,                      // 0..15 position in current section
+    section: 0,                         // section counter
+    density: 0.5,                       // 0..1, what's playing
+    leadPhrase: [] as Array<{ at: number; deg: number; dur: number }>, // relative timings within a 4-bar phrase
+    leadBar: 0,                         // 0..3 within the current 4-bar phrase
+  };
+
+  // Called on bar boundary (inBar === 0). Advances section state,
+  // picks the next chord, regenerates voicings + patterns + (on 4-bar
+  // marks) a lead phrase. All randomness is pulled from Math.random
+  // so each session draws a unique score.
+  private planNextBar(): void {
+    const c = this.composer;
+
+    // Section-level density curve. 16 bars per section, density
+    // follows a smooth cosine window so the listener gets recognizable
+    // rise/fall shapes without a hard on/off feel. The absolute floor
+    // and ceiling drift slowly so no two sections sound identical.
+    const sectionProg = c.sectionBar / 16;
+    const sectionFloor = 0.2 + 0.15 * Math.sin(c.section * 0.7);
+    const sectionCeil  = 0.85 + 0.1  * Math.sin(c.section * 0.53 + 1.2);
+    const curve = 0.5 - 0.5 * Math.cos(sectionProg * Math.PI * 2);
+    c.density = sectionFloor + (sectionCeil - sectionFloor) * curve;
+
+    // Pick next chord via Markov walk. Avoid the exact same 2-chord
+    // alternation (X→Y→X→Y) by re-rolling once if that pattern appears.
+    let candidate = pickWeighted(TRANSITIONS[c.fnName] || [["i", 1]], Math.random);
+    if (candidate === c.lastFn && Math.random() < 0.6) {
+      candidate = pickWeighted(TRANSITIONS[c.fnName] || [["i", 1]], Math.random);
+    }
+    c.lastFn = c.fnName;
+    c.fnName = candidate;
+
+    // New voicing each bar so revisits don't sound copied.
+    const voicingId = Math.floor(Math.random() * 4);
+    c.material = voiceChord(c.fnName, voicingId);
+
+    // Peek ahead for chromatic bass approach.
+    const peekNext = pickWeighted(TRANSITIONS[c.fnName] || [["i", 1]], Math.random);
+    c.nextMaterial = voiceChord(peekNext, Math.floor(Math.random() * 4));
+
+    // Bass + arp patterns. Slight bias toward repeating the arpeggio
+    // across 2-bar pairs (musical phrasing) but always freshly drawn
+    // on bar 1 of each 4-bar phrase.
+    c.bassPattern = pickWeighted(BASS_PATTERNS, Math.random);
+    if (c.sectionBar % 4 === 0) {
+      c.arpPhrase = pickWeighted(ARP_PHRASES, Math.random);
+    }
+
+    // On each 4-bar phrase boundary (if density high enough) draft
+    // a lead melody — a tiny improvised line that sits over the next
+    // 4 bars. Store as (offset-in-steps, scale-degree, duration)
+    // tuples so the scheduler can place them against real ctx time.
+    if (c.sectionBar % 4 === 0 && c.density > 0.55) {
+      c.leadPhrase = generateLeadPhrase(c.material, c.density, Math.random);
+      c.leadBar = 0;
+    }
+    if (c.sectionBar % 4 !== 0) c.leadBar++;
+
+    // Advance section counter.
+    c.sectionBar = (c.sectionBar + 1) % 16;
+    if (c.sectionBar === 0) c.section++;
+  }
+
+  // Eighth-note scheduler. Plans a new bar on every bar boundary,
+  // then dispatches per-voice material to the sound engine.
   private scheduleBeat(step: number, at: number): void {
     const barLen = 8;
-    const bar = Math.floor(step / barLen);
     const inBar = step % barLen;
-    const chord = CHORDS[bar % CHORDS.length];
+    const c = this.composer;
 
-    // Swing: delay every other eighth by ~16%.
+    if (inBar === 0) this.planNextBar();
+    const mat = c.material;
+    if (!mat) return;
+
+    // Swing: offbeats delayed ~16% of a step.
     const swingT = inBar % 2 === 1 ? at + STEP * 0.16 : at;
 
-    // Pad swells in on the 1 of every bar and sustains through it.
-    if (inBar === 0) this.playPad(chord.pad, at);
+    // --- pad ---
+    // Swells on every bar 1. Voicing was freshly picked in planNextBar.
+    if (inBar === 0) this.playPad(mat.padNotes, at);
 
-    // Walking bass: one note per beat (= every 2 steps).
+    // --- walking bass ---
+    // 4 quarter notes per bar (= every 2 steps).
     if (inBar % 2 === 0) {
-      const bi = inBar / 2; // 0..3
-      this.playBass(chord.bassWalk[bi], at);
+      const notes = bassWalk(
+        mat.root,
+        c.bassPattern,
+        c.nextMaterial ? c.nextMaterial.root : mat.root
+      );
+      const bi = inBar / 2;
+      this.playBass(degHz(notes[bi]), at);
     }
 
-    // Vibraphone arpeggio: syncopated phrase mapping steps → scale index.
-    // Rests on 4 & 8 for breathing. Slight bar-based offset creates
-    // phrase movement across the progression.
-    const ARP_PHRASE: (number | null)[] = [0, 2, 4, null, 3, 5, 2, null];
-    const arpIdx = ARP_PHRASE[inBar];
-    if (arpIdx !== null) {
-      const f = chord.scale[(arpIdx + bar) % chord.scale.length];
-      this.playVibes(f, swingT);
+    // --- vibraphone arpeggio ---
+    // Only plays if section density is past the threshold — sparse
+    // intros breathe without arpeggiation, peak sections fill in.
+    if (c.density > 0.35) {
+      const arpIdx = c.arpPhrase[inBar];
+      if (arpIdx !== null && arpIdx !== undefined) {
+        // Occasionally transpose the phrase up an octave for a "lift".
+        const shift = c.density > 0.7 && Math.random() < 0.18 ? 1 : 0;
+        const hz = mat.scaleHz[arpIdx] * (shift ? 2 : 1);
+        this.playVibes(hz, swingT);
+      }
     }
 
-    // Brushed-snare-ish hiss on the 2 & 4 of every bar (backbeat).
-    if (inBar === 2 || inBar === 6) this.playBrush(swingT);
+    // --- brushed backbeat ---
+    // Tick on 2 & 4 when density warrants. Skip on ultra-sparse intros.
+    if (c.density > 0.45 && (inBar === 2 || inBar === 6)) {
+      this.playBrush(swingT);
+    }
 
-    // Glockenspiel sparkle: one per 4-bar phrase, on the last 2 steps of
-    // that phrase, picking upper chord tones.
-    if (bar % 4 === 3 && (inBar === 5 || inBar === 7)) {
-      const f = chord.scale[chord.scale.length - 1 - (inBar === 5 ? 2 : 0)];
-      this.playSparkle(f * 2, swingT);
+    // --- glockenspiel sparkle ---
+    // Last 2 steps of a 4-bar phrase if density is high, stochastic
+    // drop-outs so it doesn't become clockwork.
+    if (c.density > 0.6 && c.sectionBar % 4 === 3 && inBar >= 5 && Math.random() < 0.55) {
+      const pick = mat.scaleHz[Math.min(mat.scaleHz.length - 1, 5 + (inBar % 3))];
+      this.playSparkle(pick * 2, swingT);
+    }
+
+    // --- lead melody ---
+    // A sparse line sitting above the arpeggio. Triggered from the
+    // leadPhrase we drafted at the 4-bar mark. We match by step
+    // within the 4-bar window so it locks to the bar structure.
+    if (c.density > 0.7 && c.leadPhrase.length > 0) {
+      const stepIn4Bar = c.leadBar * barLen + inBar;
+      for (const note of c.leadPhrase) {
+        if (note.at === stepIn4Bar) {
+          const hz = degHz(mat.root + 7 + note.deg);
+          this.playLead(hz, swingT, note.dur);
+        }
+      }
     }
   }
 
@@ -626,6 +887,71 @@ class SoundEngine {
     if (this.reverb) {
       const send = ctx.createGain();
       send.gain.value = 0.7;
+      g.connect(send);
+      send.connect(this.reverb);
+    }
+  }
+
+  // Lead voice — warm, slightly reedy. Filtered sawtooth with a slow
+  // attack so notes bloom rather than stab, plus a light vibrato that
+  // ramps in over the first 40% of the note (like a singer leaning
+  // into a held tone). `durSteps` is in eighth-note steps; we convert
+  // to seconds via STEP.
+  private playLead(freq: number, at: number, durSteps: number): void {
+    const ctx = this.ctx!;
+    const bus = this.musicBus;
+    if (!bus) return;
+    const dur = Math.max(0.18, durSteps * STEP);
+
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 1600;
+    lp.Q.value = 1.2;
+    lp.connect(bus);
+
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.linearRampToValueAtTime(0.055, at + 0.05);        // slow bloom
+    g.gain.setValueAtTime(0.055, at + dur - 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    g.connect(lp);
+
+    // Sawtooth body + sine sub an octave down for warmth.
+    const o1 = ctx.createOscillator();
+    o1.type = "sawtooth";
+    o1.frequency.value = freq;
+
+    const o2 = ctx.createOscillator();
+    o2.type = "sine";
+    o2.frequency.value = freq * 0.5;
+    const o2g = ctx.createGain();
+    o2g.gain.value = 0.35;
+    o2.connect(o2g);
+    o2g.connect(g);
+
+    // Delayed vibrato → mimics a player leaning on a sustained note.
+    const vib = ctx.createOscillator();
+    vib.frequency.value = 4.8;
+    const vibAmt = ctx.createGain();
+    vibAmt.gain.setValueAtTime(0, at);
+    vibAmt.gain.linearRampToValueAtTime(6, at + dur * 0.4); // cents
+    vib.connect(vibAmt);
+    vibAmt.connect(o1.detune);
+
+    // Filter sweep opens as the note blooms, closes as it fades.
+    lp.frequency.setValueAtTime(1100, at);
+    lp.frequency.linearRampToValueAtTime(2400, at + dur * 0.35);
+    lp.frequency.linearRampToValueAtTime(1300, at + dur);
+
+    o1.connect(g);
+    o1.start(at); o2.start(at); vib.start(at);
+    o1.stop(at + dur + 0.05);
+    o2.stop(at + dur + 0.05);
+    vib.stop(at + dur + 0.05);
+
+    if (this.reverb) {
+      const send = ctx.createGain();
+      send.gain.value = 0.55;
       g.connect(send);
       send.connect(this.reverb);
     }
