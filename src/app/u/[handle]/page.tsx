@@ -5,6 +5,9 @@ import ChatDrawer from "@/components/ChatDrawer";
 import Avatar from "@/components/Avatar";
 import { q } from "@/lib/db";
 import { ActivityChart, PerGameChart } from "@/components/stats/StatsCharts";
+import AchievementsPanel from "@/components/AchievementsPanel";
+import { loadCatalog, type AchievementDef } from "@/lib/achievements";
+import { GAMES } from "@/lib/games";
 
 export const dynamic = "force-dynamic";
 
@@ -148,6 +151,51 @@ export default async function UserProfilePage({
   )[0];
   const firstSeen = firstSeenRow?.min ? new Date(firstSeenRow.min).toISOString() : null;
 
+  // Achievements for public profile view. Same query + catalog-stitch
+  // pattern as /api/stats; inlined here to match the page's direct-DB
+  // style (see the top-of-file comment about not going through the
+  // session-gated /api/stats).
+  const unlockRows = await q<{
+    game_slug: string;
+    achievement_key: string;
+    unlocked_at: Date;
+    points: number;
+  }>(
+    `SELECT game_slug, achievement_key, unlocked_at, points
+       FROM user_achievements
+      WHERE user_id=$1
+      ORDER BY unlocked_at ASC`,
+    [userId]
+  );
+  const catalogs = new Map<string, AchievementDef[]>();
+  await Promise.all(
+    GAMES.map(async (g) => {
+      catalogs.set(g.slug, (await loadCatalog(g.slug))?.achievements ?? []);
+    })
+  );
+  const unlocksByGame = new Map<
+    string,
+    Array<{ key: string; unlockedAt: string; points: number }>
+  >();
+  let achievementPoints = 0;
+  for (const u of unlockRows) {
+    const arr = unlocksByGame.get(u.game_slug) ?? [];
+    arr.push({
+      key: u.achievement_key,
+      unlockedAt: new Date(u.unlocked_at).toISOString(),
+      points: u.points,
+    });
+    unlocksByGame.set(u.game_slug, arr);
+    achievementPoints += u.points;
+  }
+  const achievementGroups = Array.from(catalogs.entries())
+    .map(([game, catalog]) => ({
+      game,
+      catalog,
+      unlocked: unlocksByGame.get(game) ?? [],
+    }))
+    .filter((a) => a.catalog.length > 0 || a.unlocked.length > 0);
+
   const payload = {
     totals: {
       playtimeSeconds: Math.round(Number(totalsRow.seconds)),
@@ -205,11 +253,12 @@ export default async function UserProfilePage({
           </div>
           <hr className="hr-dither mb-6" />
 
-          <section className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-8">
+          <section className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-8">
             <Kpi label="playtime" value={fmtDur(payload.totals.playtimeSeconds)} accent="#8a4fff" />
             <Kpi label="sessions" value={String(payload.totals.sessions)} accent="#66e0ff" />
             <Kpi label="games" value={String(payload.totals.games)} accent="#33ff66" />
             <Kpi label="saves" value={String(payload.totals.saves)} accent="#ffb347" />
+            <Kpi label="achv" value={`${unlockRows.length} · ${achievementPoints}p`} accent="#ffd54a" />
             <Kpi label="messages" value={String(payload.totals.messages)} accent="#ff6bd6" />
           </section>
 
@@ -226,6 +275,13 @@ export default async function UserProfilePage({
               <PerGameChart data={payload.perGame} />
             </div>
           </section>
+
+          {achievementGroups.length > 0 && (
+            <section className="mb-10">
+              <div className="stamp mb-2 text-amber-signal">trophies :: unlocked</div>
+              <AchievementsPanel groups={achievementGroups} />
+            </section>
+          )}
         </div>
       </main>
     </>

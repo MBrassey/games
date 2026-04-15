@@ -118,17 +118,18 @@ Portal code: [CC0](./LICENSE). Games: each under its own license.
 9. [Chat system (SSE + KV pub/sub)](#chat-system-sse--kv-pubsub)
 10. [Presence, multiplayer, and Vercel's WebSocket limit](#presence-multiplayer-and-vercels-websocket-limit)
 11. [Telemetry and stats](#telemetry-and-stats)
-12. [Audio engine](#audio-engine)
-13. [Visual theme and effects](#visual-theme-and-effects)
-14. [Adding a new game](#adding-a-new-game)
-15. [Local development](#local-development)
-16. [Vercel setup](#vercel-setup)
-17. [GitHub OAuth](#github-oauth)
-18. [Namecheap DNS](#namecheap-dns)
-19. [Troubleshooting](#troubleshooting)
-20. [File layout](#file-layout)
-21. [Scripts](#scripts)
-22. [License](#license)
+12. [Achievements](#achievements)
+13. [Audio engine](#audio-engine)
+14. [Visual theme and effects](#visual-theme-and-effects)
+15. [Adding a new game](#adding-a-new-game)
+16. [Local development](#local-development)
+17. [Vercel setup](#vercel-setup)
+18. [GitHub OAuth](#github-oauth)
+19. [Namecheap DNS](#namecheap-dns)
+20. [Troubleshooting](#troubleshooting)
+21. [File layout](#file-layout)
+22. [Scripts](#scripts)
+23. [License](#license)
 
 ---
 
@@ -156,6 +157,7 @@ Portal code: [CC0](./LICENSE). Games: each under its own license.
 │   │                         Postgres (Neon)                            │         │
 │   │  users · accounts · sessions · user_profiles · user_preferences    │         │
 │   │  game_saves · game_sessions · chat_messages · chat_presence        │         │
+│   │  user_achievements (per-user unlock records)                       │         │
 │   └──────────────────────────┬─────────────────────────────────────────┘         │
 │                              │                                                   │
 │                        ┌─────▼──────┐                                            │
@@ -235,6 +237,15 @@ All schema lives in `migrations/*.sql` — applied in order, tracked in
 - `game_sessions` — one row per continuous play session. Heartbeats from
   the runner bump `last_heartbeat`; gaps of more than 2 minutes start a
   new session. Playtime = `SUM(last_heartbeat - started_at)`.
+
+### Achievements (`0004_achievements.sql`)
+
+- `user_achievements` — primary key `(user_id, game_slug, achievement_key)`.
+  Records *who unlocked what and when*; `points` is snapshotted at unlock
+  time so catalog bumps don't retroactively change earned totals, and
+  `meta JSONB` stores any game-supplied context (run id, seed, score).
+  Catalog definitions themselves live per-game in `achievements.json` at
+  the game's repo root — see [Achievements](#achievements).
 
 ### Chat (`0001_init.sql`)
 
@@ -346,16 +357,25 @@ The modifications:
 
 ```
 parent → runtime:
-  { type: "loveweb:auth",            signedIn: boolean }
-  { type: "loveweb:saves:manifest",  files: [{ path, updated_at }] }
-  { type: "loveweb:save:data",       reqId, dataB64 | null }
+  { type: "loveweb:auth",                signedIn: boolean }
+  { type: "loveweb:saves:manifest",      files: [{ path, updated_at }] }
+  { type: "loveweb:save:data",           reqId, dataB64 | null }
+  { type: "loveweb:achievements:state",  unlocks: [{ key, unlockedAt, points }] }
+  { type: "loveweb:achievement:ack",     key, fresh, points }
 
 runtime → parent:
-  { type: "loveweb:ready",           game: slug }
-  { type: "loveweb:save:write",      path, dataB64, meta }
-  { type: "loveweb:save:read",       path, reqId }
-  { type: "loveweb:log",             level, msg }
+  { type: "loveweb:ready",               game: slug }
+  { type: "loveweb:save:write",          path, dataB64, meta }
+  { type: "loveweb:save:read",           path, reqId }
+  { type: "loveweb:log",                 level, msg }
+  { type: "loveweb:achievement:unlock",  key, meta }
 ```
+
+Achievement unlocks also support a **magic-print** escape hatch for Lua
+code that doesn't want to touch the JS bridge directly: emitting
+`print("[[LOVEWEB_ACH]]unlock <key>")` from Lua is intercepted by the
+runtime's stdout hook and forwarded as a `loveweb:achievement:unlock`
+message. See [Achievements](#achievements) for the full spec.
 
 The `GameRunner` React component holds the parent side of the bridge in
 `src/components/GameRunner.tsx`.
@@ -517,6 +537,95 @@ terminal aesthetic.
 
 ---
 
+## Achievements
+
+Every game on the portal can publish its own achievements, and the
+portal surfaces them on the player's stats page, on public profiles,
+and on the leaderboard — with the games themselves needing only a JSON
+file and a single `print` line.
+
+The full author-facing spec lives in
+[`docs/ACHIEVEMENTS.md`](./docs/ACHIEVEMENTS.md). The portal-side
+wiring works like this:
+
+### Catalog — shipped with the game
+
+Each game declares its catalog in `achievements.json` at its repo root,
+using the schema documented in the spec above. The build pipeline
+(`scripts/build-games.mjs`) mirrors this file into
+`public/games/<slug>/achievements.json` during every deploy, alongside
+the compiled runtime bundle. The same file is also bundled into the
+`.love` so the game can read its own definitions with
+`love.filesystem` at runtime. One file, two readers, no drift.
+
+Optional per-achievement icons go in `achievements_icons/` next to
+`achievements.json`; the whole directory is mirrored to
+`public/games/<slug>/achievements_icons/` for portal rendering.
+
+### Unlock flow
+
+1. Lua code emits `print("[[LOVEWEB_ACH]]unlock <key>")` — no JS
+   interop, no HTTP client, no auth handling.
+2. The runtime shell (`templates/love-runtime-index.html`) intercepts
+   the line in its `print` hook, parses the verb, and forwards
+   `{ type: "loveweb:achievement:unlock", key, meta }` via
+   `postMessage` to the parent.
+3. `GameRunner` POSTs to `/api/achievements/unlock` with the player's
+   session cookie. The endpoint **validates the key against the
+   catalog** (allowlist — unknown keys are rejected 404) and upserts
+   into `user_achievements` with `points` snapshotted from the catalog.
+4. On success the parent re-pushes the full unlocked state to the
+   iframe; the runtime re-writes the in-game metadata file so the
+   game's own UI can reflect the change immediately.
+
+Unlocks are idempotent — a replay is a no-op, `unlocked_at` never moves.
+
+### State delivery — game reads its own unlocks
+
+Before `main.lua` runs, the runtime pre-populates
+`<save-dir>/__loveweb__/achievements.json` with
+`{ version: 1, unlocks: [{ key, unlockedAt, points }, …] }`. The game
+can read it with standard `love.filesystem` to paint a "locked / earned
+on <date>" grid in its own UI. The runtime refreshes this file
+mid-session whenever a new unlock lands.
+
+The save-watch loop skips the `__loveweb__/` subtree so portal-managed
+metadata never round-trips into `game_saves`.
+
+### API endpoints
+
+- `GET /api/achievements?game=<slug>` — catalog + caller's unlocks.
+  Accepts `?user=<id>` to look up another user's unlocks (used by
+  public profile pages).
+- `GET /api/achievements` — every registered game's catalog, no user
+  unlocks. For aggregate views.
+- `POST /api/achievements/unlock` — body `{ game, key, meta? }`.
+  Authenticated, idempotent, catalog-gated.
+
+### Portal rendering
+
+- **Stats page** (`/stats`) and **public profiles** (`/u/<handle>`) —
+  `AchievementsPanel` renders one card per game, listing every
+  catalog entry with locked/unlocked state, date, points, and rarity.
+  Hidden achievements display as `???` until earned.
+- **Leaderboard** — the row adds an `achv · pts` column showing count
+  and total points. Achievement points slot in as a tie-break signal
+  ahead of sessions and messages, so completionists surface above
+  pure idle time when playtime is tied.
+- **KPI row** — a new trophy tile on both stats and profile pages
+  shows total unlocks and total points earned across every game.
+
+### Why not a DB-backed catalog?
+
+The file-on-disk approach means builds don't need DB access — the
+portal just reads JSON at request time with mtime-keyed in-process
+caching. New catalogs ship via the normal
+[upstream-games-watch](#auto-deploy-on-upstream-game-pushes) workflow:
+push to the game repo → portal redeploys within 10 min → new
+definitions go live. No migration dance, no schema sync step.
+
+---
+
 ## Audio engine
 
 All sound is **synthesized live** in the browser via the Web Audio API.
@@ -642,6 +751,16 @@ Rebuild only one game locally:
 ```sh
 pnpm build:games your-game
 ```
+
+### Optional: achievements
+
+Drop an `achievements.json` at the root of your game repo to opt into
+the portal-wide achievement system. The file ships inside the `.love`
+for the game to read, and is mirrored to
+`public/games/<slug>/achievements.json` for portal validation and
+rendering. See [`docs/ACHIEVEMENTS.md`](./docs/ACHIEVEMENTS.md) for the
+full schema and the one-line `print("[[LOVEWEB_ACH]]unlock …")`
+protocol used to unlock from Lua.
 
 ### Auto-deploy on upstream game pushes
 
@@ -846,10 +965,14 @@ games/
 ├── .env.example                       template for local .env.local
 ├── .gitignore
 │
+├── docs/
+│   └── ACHIEVEMENTS.md                author-facing spec: achievements.json + magic-print unlock
+│
 ├── migrations/                        SQL migrations, applied in order
 │   ├── 0001_init.sql                  ── Auth.js + portal tables
 │   ├── 0002_stats.sql                 ── game_sessions (playtime heartbeats)
-│   └── 0003_profile_github.sql        ── user_profiles GitHub fields
+│   ├── 0003_profile_github.sql        ── user_profiles GitHub fields
+│   └── 0004_achievements.sql          ── user_achievements (unlock records)
 │
 ├── scripts/
 │   ├── build-games.mjs                ┐ the game pipeline — prebuild hook
@@ -866,6 +989,8 @@ games/
 │   ├── favicon.svg
 │   └── games/<slug>/
 │       ├── game.love                  ← generated by build-games.mjs (gitignored)
+│       ├── achievements.json          ← mirrored from upstream repo (if declared)
+│       ├── achievements_icons/        ← mirrored from upstream repo (optional)
 │       └── runtime/                   ← generated by build-games.mjs (gitignored)
 │           ├── index.html             (from templates/love-runtime-index.html)
 │           ├── love.js                emscripten loader
@@ -891,6 +1016,9 @@ games/
     │       │   └── stream/route.ts            SSE delivery (KV-backed)
     │       ├── stats/route.ts                 GET aggregated user stats
     │       ├── stats/heartbeat/route.ts       POST session heartbeat (30s)
+    │       ├── achievements/route.ts          GET catalog + caller's unlocks
+    │       ├── achievements/unlock/route.ts   POST unlock (catalog-gated, idempotent)
+    │       ├── leaderboard/route.ts           GET top-100 ranked leaderboard
     │       └── health/route.ts                GET diagnostics (DB + KV + env)
     │
     ├── components/
@@ -898,7 +1026,8 @@ games/
     │   ├── HeroBanner.tsx             landing hero on /
     │   ├── GameGrid.tsx               catalog grid of GameCards
     │   ├── GameCard.tsx               single game tile with corner brackets
-    │   ├── GameRunner.tsx             iframe + postMessage bridge + heartbeat
+    │   ├── GameRunner.tsx             iframe + postMessage bridge + heartbeat + achievements
+    │   ├── AchievementsPanel.tsx      per-game achievement grid (stats + profiles)
     │   ├── ChatDrawer.tsx             semi-transparent right drawer w/ SSE client
     │   ├── Avatar.tsx                 rounded-square, glowing, deterministic color
     │   ├── UserMenu.tsx               click-avatar dropdown (Sign out, etc.)
@@ -916,6 +1045,7 @@ games/
     │   ├── db.ts                      pg connection pool + q() helper
     │   ├── kv.ts                      @vercel/kv client + channel constants
     │   ├── games.ts                   GAMES registry ◀ add games here
+    │   ├── achievements.ts            catalog loader + validator (reads achievements.json)
     │   └── sound.ts                   Web Audio engine — SFX + music + ducking
     │
     └── types/                         (reserved for ambient type declarations)

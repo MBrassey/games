@@ -81,13 +81,14 @@ export default async function LeaderboardPage() {
           ) : (
             <div className="panel overflow-hidden">
               {/* header row */}
-              <div className="grid grid-cols-[44px_1fr_92px_68px_60px_60px_68px_92px] items-center gap-3 px-4 py-2 border-b border-eldritch-deep/60 bg-void-1/60 text-[0.6rem] uppercase tracking-[0.25em] text-bone/45">
+              <div className="grid grid-cols-[44px_1fr_92px_68px_60px_60px_88px_68px_92px] items-center gap-3 px-4 py-2 border-b border-eldritch-deep/60 bg-void-1/60 text-[0.6rem] uppercase tracking-[0.25em] text-bone/45">
                 <span>rank</span>
                 <span>operator</span>
                 <span className="text-right">playtime</span>
                 <span className="text-right">sess</span>
                 <span className="text-right">games</span>
                 <span className="text-right">saves</span>
+                <span className="text-right">achv · pts</span>
                 <span className="text-right">msgs</span>
                 <span className="text-right">last seen</span>
               </div>
@@ -98,7 +99,7 @@ export default async function LeaderboardPage() {
                 return (
                   <div
                     key={r.userId}
-                    className={`grid grid-cols-[44px_1fr_92px_68px_60px_60px_68px_92px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-eldritch-purple/5 ${
+                    className={`grid grid-cols-[44px_1fr_92px_68px_60px_60px_88px_68px_92px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-eldritch-purple/5 ${
                       i % 2 === 0 ? "bg-eldritch-deep/10" : ""
                     } ${isMe ? "ring-1 ring-inset ring-abyss-cyan/40" : ""}`}
                   >
@@ -126,6 +127,17 @@ export default async function LeaderboardPage() {
                     <span className="text-right font-mono text-xs text-bone/75 tabular-nums">{r.sessions}</span>
                     <span className="text-right font-mono text-xs text-bone/75 tabular-nums">{r.games}</span>
                     <span className="text-right font-mono text-xs text-bone/75 tabular-nums">{r.saves}</span>
+                    <span
+                      className="text-right font-mono text-xs tabular-nums"
+                      style={{
+                        color: r.achievementPoints > 0 ? "#ffd54a" : "#6b5f82",
+                        textShadow: r.achievementPoints > 0 ? "0 0 6px #ffd54a55" : "none",
+                      }}
+                    >
+                      {r.achievements}
+                      <span className="text-bone/35"> · </span>
+                      {r.achievementPoints}
+                    </span>
                     <span className="text-right font-mono text-xs text-bone/75 tabular-nums">{r.messages}</span>
                     <span className="text-right font-mono text-[0.65rem] text-bone/45 tabular-nums">
                       {fmtDate(r.lastSeenAt)}
@@ -137,7 +149,7 @@ export default async function LeaderboardPage() {
           )}
 
           <p className="mt-4 text-[0.62rem] uppercase tracking-[0.25em] text-bone/35">
-            ▸ click any operator to view their profile · tie-break order: playtime · sessions · messages
+            ▸ click any operator to view their profile · tie-break order: playtime · achievement pts · sessions · messages
           </p>
         </div>
       </main>

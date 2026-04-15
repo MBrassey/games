@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { q } from "@/lib/db";
+import { loadCatalog, type AchievementDef } from "@/lib/achievements";
+import { GAMES } from "@/lib/games";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +15,8 @@ export type StatsPayload = {
     games: number;
     saves: number;
     messages: number;
+    achievements: number;
+    achievementPoints: number;
   };
   perGame: Array<{
     slug: string;
@@ -20,10 +24,16 @@ export type StatsPayload = {
     sessions: number;
     saves: number;
     lastPlayedAt: string | null;
+    achievements: { unlocked: number; total: number; points: number };
   }>;
   activity30d: Array<{ day: string; playtimeSeconds: number; messages: number }>;
   recentSaves: Array<{ game: string; path: string; updatedAt: string }>;
   recentSessions: Array<{ game: string; startedAt: string; seconds: number }>;
+  achievements: Array<{
+    game: string;
+    catalog: AchievementDef[];
+    unlocked: Array<{ key: string; unlockedAt: string; points: number }>;
+  }>;
 };
 
 export async function GET() {
@@ -67,6 +77,52 @@ export async function GET() {
     [userId]
   );
   const savesMap = new Map(savesPerGame.map((r) => [r.game_slug, Number(r.n)]));
+
+  // All unlocks for this user, one row per (game, key). We load catalogs
+  // in parallel (per registered game) and stitch locally — cheaper than
+  // joining through JSONB stored in postgres.
+  const unlockRows = await q<{
+    game_slug: string;
+    achievement_key: string;
+    unlocked_at: Date;
+    points: number;
+  }>(
+    `SELECT game_slug, achievement_key, unlocked_at, points
+       FROM user_achievements
+      WHERE user_id=$1
+      ORDER BY unlocked_at ASC`,
+    [userId]
+  );
+  const catalogs = new Map<string, AchievementDef[]>();
+  await Promise.all(
+    GAMES.map(async (g) => {
+      catalogs.set(g.slug, (await loadCatalog(g.slug))?.achievements ?? []);
+    })
+  );
+  const unlocksByGame = new Map<
+    string,
+    Array<{ key: string; unlockedAt: string; points: number }>
+  >();
+  let totalAchPoints = 0;
+  for (const u of unlockRows) {
+    const bucket = unlocksByGame.get(u.game_slug) ?? [];
+    bucket.push({
+      key: u.achievement_key,
+      unlockedAt: new Date(u.unlocked_at).toISOString(),
+      points: u.points,
+    });
+    unlocksByGame.set(u.game_slug, bucket);
+    totalAchPoints += u.points;
+  }
+  const achievementsSection = Array.from(catalogs.entries())
+    .map(([game, catalog]) => ({
+      game,
+      catalog,
+      unlocked: unlocksByGame.get(game) ?? [],
+    }))
+    // Hide games that declare no achievements AND have no unlocks — not
+    // useful to render empty cards for them.
+    .filter((a) => a.catalog.length > 0 || a.unlocked.length > 0);
 
   const totalsRow = (
     await q<{
@@ -147,14 +203,25 @@ export async function GET() {
       games: Number(totalsRow.games),
       saves: Number(totalsRow.saves),
       messages: Number(totalsRow.messages),
+      achievements: unlockRows.length,
+      achievementPoints: totalAchPoints,
     },
-    perGame: perGame.map((r) => ({
-      slug: r.game_slug,
-      playtimeSeconds: Math.round(Number(r.seconds)),
-      sessions: Number(r.sessions),
-      saves: savesMap.get(r.game_slug) ?? 0,
-      lastPlayedAt: r.last_played_at ? new Date(r.last_played_at).toISOString() : null,
-    })),
+    perGame: perGame.map((r) => {
+      const catalog = catalogs.get(r.game_slug) ?? [];
+      const unlocked = unlocksByGame.get(r.game_slug) ?? [];
+      return {
+        slug: r.game_slug,
+        playtimeSeconds: Math.round(Number(r.seconds)),
+        sessions: Number(r.sessions),
+        saves: savesMap.get(r.game_slug) ?? 0,
+        lastPlayedAt: r.last_played_at ? new Date(r.last_played_at).toISOString() : null,
+        achievements: {
+          unlocked: unlocked.length,
+          total: catalog.length,
+          points: unlocked.reduce((s, u) => s + u.points, 0),
+        },
+      };
+    }),
     activity30d: activity.map((a) => ({
       day: a.day,
       playtimeSeconds: Math.round(Math.max(0, Number(a.seconds))),
@@ -170,6 +237,7 @@ export async function GET() {
       startedAt: new Date(r.started_at).toISOString(),
       seconds: Math.round(Math.max(0, Number(r.seconds))),
     })),
+    achievements: achievementsSection,
   };
 
   return NextResponse.json(payload);

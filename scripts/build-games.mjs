@@ -130,6 +130,37 @@ async function buildGame(game) {
   // Overwrite index.html with the bridge-enabled template
   copyFileSync(TEMPLATE_HTML, join(runtimeDir, "index.html"));
 
+  // Mirror the game's achievement catalog (if declared) into public/ so
+  // the portal API can read it. Source of truth is whatever lives at the
+  // repo root of the upstream game — this is the same file bundled into
+  // the .love, so portal and game always agree on keys.
+  //
+  // Absence is fine: a game without achievements gets an empty catalog
+  // in the UI and the unlock API rejects any calls for that slug.
+  const achvSrc = join(loveSrc, "achievements.json");
+  const achvDst = join(PUBLIC_GAMES, slug, "achievements.json");
+  if (existsSync(achvSrc)) {
+    copyFileSync(achvSrc, achvDst);
+    console.log(`  ok  mirrored achievements.json → ${achvDst}`);
+  } else {
+    // Ensure any stale copy is removed so a game that drops achievements
+    // doesn't keep showing zombie definitions.
+    try { rmSync(achvDst); } catch {}
+    console.log(`  --  no achievements.json in upstream`);
+  }
+
+  // Optionally mirror an icon directory referenced by the catalog. Games
+  // can ship /achievements_icons/*.png next to achievements.json; we copy
+  // the whole tree so icon: "achievements_icons/foo.png" resolves to
+  // /games/<slug>/achievements_icons/foo.png on the portal.
+  const iconSrc = join(loveSrc, "achievements_icons");
+  const iconDst = join(PUBLIC_GAMES, slug, "achievements_icons");
+  rmSync(iconDst, { recursive: true, force: true });
+  if (existsSync(iconSrc)) {
+    cpSync(iconSrc, iconDst, { recursive: true });
+    console.log(`  ok  mirrored achievements_icons/ → ${iconDst}`);
+  }
+
   // Post-patch love.js to expose the emscripten FS object on Module.
   // love.js's default build only exports a handful of FS_* helpers
   // (FS_createDataFile, FS_createPath, ...) and keeps the full FS
