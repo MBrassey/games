@@ -9,7 +9,10 @@ type IncomingMsg =
   | { type: "loveweb:save:write"; path: string; dataB64: string; meta?: Record<string, unknown> }
   | { type: "loveweb:save:read"; path: string; reqId: string }
   | { type: "loveweb:save:list"; reqId: string }
-  | { type: "loveweb:log"; level: string; msg: string };
+  | { type: "loveweb:log"; level: string; msg: string }
+  | { type: "loveweb:achievement:unlock"; key: string; meta?: Record<string, unknown> | null };
+
+type UnlockEntry = { key: string; unlockedAt: string; points: number };
 
 // Embeds the love.js runtime in a sandboxed iframe and brokers save
 // operations between it and /api/saves. Graceful fallback UI when the
@@ -156,9 +159,10 @@ export default function GameRunner({
   }, [runtimePath]);
 
   // Extracted so both `loveweb:hello` and the iframe's `onLoad` can use it.
-  // Pushes the manifest + auth state to the runtime, triggering save
-  // prepopulation. Safe to call more than once per iframe lifetime — the
-  // runtime resolves its manifest promise at most once.
+  // Pushes the manifest + auth state + achievement state to the runtime,
+  // triggering save prepopulation and achievement-state injection into the
+  // game's save dir. Safe to call more than once per iframe lifetime — the
+  // runtime resolves its manifest/achievements promises at most once.
   const pushManifest = async () => {
     const iframe = iframeRef.current;
     if (!iframe || !iframe.contentWindow) return;
@@ -173,6 +177,16 @@ export default function GameRunner({
       }
     } else {
       reply({ type: "loveweb:saves:manifest", files: [] });
+    }
+    // Achievement state: catalog lives in the game itself (bundled in
+    // .love), but the unlocked set is portal-side. Send the unlocks — the
+    // runtime writes them to __loveweb__/achievements.json in the save FS.
+    try {
+      const r = await fetch(`/api/achievements?game=${encodeURIComponent(slug)}`);
+      const j = r.ok ? await r.json() : { unlocks: [] };
+      reply({ type: "loveweb:achievements:state", unlocks: (j.unlocks ?? []) as UnlockEntry[] });
+    } catch {
+      reply({ type: "loveweb:achievements:state", unlocks: [] });
     }
     reply({ type: "loveweb:auth", signedIn });
   };
@@ -227,6 +241,36 @@ export default function GameRunner({
         } else if (data.type === "loveweb:log") {
           // eslint-disable-next-line no-console
           console.log(`[${slug}] ${data.level}:`, data.msg);
+        } else if (data.type === "loveweb:achievement:unlock") {
+          if (!signedIn) return;
+          const r = await fetch(`/api/achievements/unlock`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game: slug, key: data.key, meta: data.meta ?? {} }),
+          });
+          if (!r.ok) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${slug}] achievement unlock failed:`, data.key, r.status);
+            return;
+          }
+          const j = (await r.json()) as {
+            fresh: boolean;
+            unlock: { key: string; points: number };
+          };
+          // Re-push the full state so the in-game meta file stays fresh
+          // for UI hydration if the game re-reads it. Also emit an ack
+          // for debugging/logs.
+          reply({
+            type: "loveweb:achievement:ack",
+            key: j.unlock.key,
+            fresh: j.fresh,
+            points: j.unlock.points,
+          });
+          try {
+            const s = await fetch(`/api/achievements?game=${encodeURIComponent(slug)}`);
+            const sj = s.ok ? await s.json() : { unlocks: [] };
+            reply({ type: "loveweb:achievements:state", unlocks: sj.unlocks ?? [] });
+          } catch { /* non-fatal */ }
         }
       } catch (e) {
         console.error("save-bridge error", e);

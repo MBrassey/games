@@ -6,14 +6,23 @@
 
   Exchange protocol with the parent GameRunner:
     parent → runtime:
-      { type: "loveweb:auth",            signedIn }
-      { type: "loveweb:saves:manifest",  files: [{path, updated_at}] }
-      { type: "loveweb:save:data",       reqId, dataB64 | null }
+      { type: "loveweb:auth",             signedIn }
+      { type: "loveweb:saves:manifest",   files: [{path, updated_at}] }
+      { type: "loveweb:save:data",        reqId, dataB64 | null }
+      { type: "loveweb:achievements:state", unlocks: [{key, unlockedAt, points}] }
+      { type: "loveweb:achievement:ack",  key, fresh, points }
     runtime → parent:
-      { type: "loveweb:ready",           game }
-      { type: "loveweb:save:write",      path, dataB64, meta }
-      { type: "loveweb:save:read",       path, reqId }
-      { type: "loveweb:log",             level, msg }
+      { type: "loveweb:ready",            game }
+      { type: "loveweb:save:write",       path, dataB64, meta }
+      { type: "loveweb:save:read",        path, reqId }
+      { type: "loveweb:log",              level, msg }
+      { type: "loveweb:achievement:unlock", key, meta }
+
+  Achievements magic-print protocol (Lua → runtime):
+    Games call `print("[[LOVEWEB_ACH]]unlock <key>")` to unlock an
+    achievement. The key must exist in the game's achievements.json.
+    Optional JSON payload: `print("[[LOVEWEB_ACH]]unlock <key> {\"run\":7}")`.
+    Unlocks are idempotent server-side.
 -->
 <!doctype html>
 <html lang="en">
@@ -64,6 +73,17 @@
     var manifestPromise = new Promise(function (res) { manifestResolve = res; });
     var pendingReads = new Map();
 
+    // Achievement state snapshot delivered by the parent before the game
+    // boots. Resolved during preRun and written into the save FS so the
+    // game can read it with standard love.filesystem calls.
+    var achievementsResolve;
+    var achievementsPromise = new Promise(function (res) { achievementsResolve = res; });
+
+    // Reserved path (under SAVE_ROOT) for portal ↔ game metadata that
+    // isn't part of the game's own save set. The save-watch loop skips
+    // this subtree so it doesn't round-trip to /api/saves.
+    var LOVEWEB_META_DIR = "__loveweb__";
+
     // Register the message listener BEFORE announcing our existence, so we
     // don't miss a fast reply.
     window.addEventListener("message", (ev) => {
@@ -72,6 +92,27 @@
       if (d.type === "loveweb:saves:manifest") manifestResolve(d.files || []);
       if (d.type === "loveweb:save:data" && d.reqId && pendingReads.has(d.reqId)) {
         const r = pendingReads.get(d.reqId); pendingReads.delete(d.reqId); r(d.dataB64);
+      }
+      if (d.type === "loveweb:achievements:state") {
+        achievementsResolve(d.unlocks || []);
+        // After boot, also refresh the on-disk snapshot so a game that
+        // re-reads __loveweb__/achievements.json mid-play sees new unlocks.
+        try {
+          var FS = Module && Module.FS;
+          if (FS) {
+            var dir = SAVE_ROOT + "/" + LOVEWEB_META_DIR;
+            try { FS.mkdirTree(dir); } catch (e) {}
+            var payload = JSON.stringify({ version: 1, unlocks: d.unlocks || [] });
+            FS.writeFile(dir + "/achievements.json", new TextEncoder().encode(payload));
+          }
+        } catch (e) { /* pre-boot: preRun writer handles it */ }
+      }
+      if (d.type === "loveweb:achievement:ack") {
+        // After a fresh unlock the parent re-emits the full state so the
+        // running game can re-read its meta file without a reload. The
+        // state message handler above takes care of writing it; the ack
+        // exists mainly to surface in logs for debugging.
+        log("info", "achievement ack " + d.key + (d.fresh ? " (fresh)" : " (replay)"));
       }
     });
     function requestRemoteRead(path) {
@@ -93,6 +134,42 @@
       return btoa(s);
     }
     function log(level, msg) { parent.postMessage({ type: "loveweb:log", level, msg: String(msg) }, "*"); }
+
+    // Magic-print protocol: LÖVE games push structured events to the portal
+    // by calling `print("[[LOVEWEB_ACH]]...")`. Intercepting here means the
+    // game side only needs standard Lua stdio — no Lua↔JS FFI required.
+    //
+    // Returns true if the line was consumed (so we suppress the raw log
+    // spam) or false if it should fall through to the normal log stream.
+    var ACH_PREFIX = "[[LOVEWEB_ACH]]";
+    function handleMagicLine(s) {
+      if (typeof s !== "string") return false;
+      // The runtime's print may prefix with "stdout/stderr" etc; look for
+      // the marker anywhere in the line rather than demanding position 0.
+      var idx = s.indexOf(ACH_PREFIX);
+      if (idx < 0) return false;
+      var rest = s.slice(idx + ACH_PREFIX.length).trim();
+      var sp = rest.indexOf(" ");
+      var verb = sp < 0 ? rest : rest.slice(0, sp);
+      var tail = sp < 0 ? "" : rest.slice(sp + 1).trim();
+      if (verb === "unlock") {
+        // Tail is "<key>" or "<key> <json-blob>". JSON is optional meta.
+        var key = tail, meta = null;
+        var m = tail.match(/^(\S+)\s+(\{[\s\S]*\})$/);
+        if (m) {
+          key = m[1];
+          try { meta = JSON.parse(m[2]); } catch (e) { meta = null; }
+        }
+        if (!/^[a-z0-9_]+$/.test(key || "")) {
+          log("warn", "achievement unlock with bad key: " + key);
+          return true;
+        }
+        parent.postMessage({ type: "loveweb:achievement:unlock", key: key, meta: meta }, "*");
+        return true;
+      }
+      log("warn", "unknown loveweb-ach verb: " + verb);
+      return true;
+    }
 
     // Tell the parent we're alive immediately, before WASM init starts.
     // The parent answers with loveweb:saves:manifest, which arrives during
@@ -119,8 +196,8 @@
     var Module = {
       arguments: ["./game.love"],
       INITIAL_MEMORY: 33554432,
-      printErr: (t) => log("error", t),
-      print: (t) => log("info", t),
+      printErr: (t) => { if (!handleMagicLine(t)) log("error", t); },
+      print:    (t) => { if (!handleMagicLine(t)) log("info", t); },
       canvas: (function(){
         const c = document.getElementById("canvas");
         c.addEventListener("webglcontextlost", (e) => { log("error", "webgl lost"); e.preventDefault(); }, false);
@@ -146,6 +223,34 @@
         Module.setStatus(left ? ("preparing " + (this.totalDependencies-left) + "/" + this.totalDependencies) : "");
       },
       preRun: [
+        function preAchievements() {
+          // Inject the current achievement state at a stable path so the
+          // game can read it with `love.filesystem.read("__loveweb__/achievements.json")`.
+          // We wait up to 3s for the parent to push the state; absence is
+          // not fatal — the file just gets written empty and the game
+          // treats that as "nothing unlocked yet."
+          Module.addRunDependency("loveweb-achievements");
+          (async () => {
+            try {
+              const FS = Module.FS;
+              if (!FS) throw new Error("Module.FS not available");
+              const unlocks = await Promise.race([
+                achievementsPromise,
+                new Promise((res) => setTimeout(function(){ res([]); }, 3000)),
+              ]);
+              const dir = SAVE_ROOT + "/" + LOVEWEB_META_DIR;
+              try { FS.mkdirTree(dir); } catch {}
+              const payload = JSON.stringify({
+                version: 1,
+                unlocks: unlocks,
+              });
+              const bytes = new TextEncoder().encode(payload);
+              FS.writeFile(dir + "/achievements.json", bytes);
+              log("info", "achievement state injected (" + unlocks.length + " unlock(s))");
+            } catch (e) { log("warn", "achievement state injection: " + e); }
+            finally { Module.removeRunDependency("loveweb-achievements"); }
+          })();
+        },
         function prePopulate() {
           Module.addRunDependency("loveweb-saves");
           (async () => {
@@ -203,10 +308,15 @@
             }
           }
 
+          // Any change under /__loveweb__/ is portal-managed metadata and
+          // must not be synced back to /api/saves — otherwise the injected
+          // achievement state would round-trip into `game_saves`.
+          const metaPrefix = SAVE_ROOT + "/" + LOVEWEB_META_DIR + "/";
           setInterval(() => {
             try {
               try { FS.mkdirTree(SAVE_ROOT); } catch {}
               walk(SAVE_ROOT, (p, st) => {
+                if (p.indexOf(metaPrefix) === 0) return;
                 const mt = +st.mtime;
                 const prev = mtimes.get(p);
                 if (prev === mt) return;
@@ -229,6 +339,7 @@
           window.addEventListener("beforeunload", () => {
             try {
               walk(SAVE_ROOT, (p) => {
+                if (p.indexOf(metaPrefix) === 0) return;
                 const bytes = FS.readFile(p);
                 const rel = p.replace(SAVE_ROOT + "/", "");
                 parent.postMessage({

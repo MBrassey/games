@@ -6,6 +6,7 @@ import ChatDrawer from "@/components/ChatDrawer";
 import Avatar from "@/components/Avatar";
 import { q } from "@/lib/db";
 import { ActivityChart, PerGameChart } from "@/components/stats/StatsCharts";
+import AchievementsPanel from "@/components/AchievementsPanel";
 import type { StatsPayload } from "@/app/api/stats/route";
 
 export const dynamic = "force-dynamic";
@@ -114,11 +115,12 @@ export default async function StatsPage() {
           <hr className="hr-dither mb-6" />
 
           {/* KPI row */}
-          <section className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-8">
+          <section className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-8">
             <Kpi label="playtime" value={fmtDur(stats?.totals.playtimeSeconds ?? 0)} accent="#8a4fff" />
             <Kpi label="sessions" value={String(stats?.totals.sessions ?? 0)} accent="#66e0ff" />
             <Kpi label="games" value={String(stats?.totals.games ?? 0)} accent="#33ff66" />
             <Kpi label="saves" value={String(stats?.totals.saves ?? 0)} accent="#ffb347" />
+            <Kpi label="achv" value={`${stats?.totals.achievements ?? 0} · ${stats?.totals.achievementPoints ?? 0}p`} accent="#ffd54a" />
             <Kpi label="messages" value={String(stats?.totals.messages ?? 0)} accent="#ff6bd6" />
           </section>
 
@@ -155,6 +157,21 @@ export default async function StatsPage() {
               )}
             </div>
           </section>
+
+          {/* Achievements section — one card per game with at least one
+              published achievement or unlock. Hidden entirely if no games
+              match. */}
+          {stats && stats.achievements.length > 0 && (
+            <section className="mb-10">
+              <div className="flex items-end justify-between mb-2">
+                <div>
+                  <div className="stamp text-amber-signal">trophies :: unlocked</div>
+                  <h2 className="text-lg uppercase tracking-[0.25em] text-bone/85 mt-1">achievements</h2>
+                </div>
+              </div>
+              <AchievementsPanel groups={stats.achievements} />
+            </section>
+          )}
 
           {/* Two-up: recent sessions + recent saves */}
           <section className="grid md:grid-cols-2 gap-5">

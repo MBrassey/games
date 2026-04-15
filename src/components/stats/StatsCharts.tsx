@@ -172,7 +172,17 @@ export function ActivityChart({
   );
 }
 
-export function PerGameChart({ data }: { data: StatsPayload["perGame"] }) {
+// Keep the prop shape minimal (structural subset of StatsPayload["perGame"])
+// so callers like the public profile page can pass a slimmer row type
+// without reconstructing the full achievements metadata.
+type PerGameRow = {
+  slug: string;
+  playtimeSeconds: number;
+  sessions: number;
+  saves: number;
+};
+
+export function PerGameChart({ data }: { data: PerGameRow[] }) {
   if (data.length === 0) {
     return <p className="text-bone/40 text-xs">no games played yet.</p>;
   }
