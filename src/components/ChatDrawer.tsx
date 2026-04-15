@@ -143,14 +143,29 @@ export default function ChatDrawer({
     if (!body || sending) return;
     setSending(true);
     setInput("");
-    // No local ping here — the SSE echo-back will fire notify when the
-    // message actually lands, which doubles as the "sent" confirmation.
     try {
-      await fetch("/api/chat/send", {
+      const r = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ channel, body }),
       });
+      // Optimistically append the sender's own message to local state the
+      // moment the server confirms it was persisted. This guarantees the
+      // user sees their message immediately regardless of broadcast
+      // health — previously, when Upstash KV was rate-limited, the send
+      // would succeed server-side but no SSE echo-back ever arrived, so
+      // the sender saw their message vanish into the void.
+      if (r.ok) {
+        try {
+          const j = (await r.json()) as { ok: boolean; message: Msg };
+          if (j?.message) {
+            setMessages((prev) => {
+              if (prev.some((p) => p.id === j.message.id)) return prev;
+              return [...prev, j.message].sort((a, b) => a.ts - b.ts).slice(-200);
+            });
+          }
+        } catch { /* response without JSON body — SSE will catch up */ }
+      }
     } finally {
       setSending(false);
     }
@@ -161,7 +176,12 @@ export default function ChatDrawer({
   return (
     <aside
       id="chat"
-      className={`fixed right-0 top-14 z-30 flex h-[calc(100vh-3.5rem)] flex-col border-l border-eldritch-deep/60 bg-void-0/45 backdrop-blur-[2px] transition-all ${
+      // Translucent enough for the BackgroundFX starfield (mounted at the
+      // root layout, z-0) to drift through the drawer — a thin 1px blur
+      // softens the particles without smearing them into mud, and a
+      // subtle linear gradient deepens the top/bottom edges so the chat
+      // chrome still has some weight against the motion behind it.
+      className={`fixed right-0 top-14 z-30 flex h-[calc(100vh-3.5rem)] flex-col border-l border-eldritch-deep/60 bg-gradient-to-b from-void-0/35 via-void-0/20 to-void-0/35 backdrop-blur-[1px] transition-all ${
         open ? "w-[380px]" : "w-10"
       }`}
     >
