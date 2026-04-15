@@ -27,34 +27,46 @@
 
 type Ctx = AudioContext;
 
-// --- procedural music composer ---
+// --- procedural EDM composer ---
 //
-// Goal: a continuous, evolving, non-repeating score in D dorian that
-// sounds like an actual hand-played lounge session, not a drone. We
-// generate material at three time-scales:
+// Goal: a continuous, non-repeating, melodic-EDM / hardware-synth score
+// that reads as actual music — driving, hook-forward, with clear
+// rise/fall dynamics — rather than ambient drone. Design:
 //
-//   1. Per bar — a Markov-walk chord function (i / ii / III / IV / v /
-//      vi / VII), a randomly-chosen voicing out of 4 shapes, a bass
-//      pattern out of 5 shapes, an arpeggio phrase out of 5 shapes.
-//   2. Per 16-bar section — a "density" curve orchestrating which
-//      voices are active (sparse intros with just pad+bass, denser
-//      B sections with arpeggio + backbeat + occasional lead melody,
-//      peak C sections adding sparkle sprays).
-//   3. Per 4-bar phrase — a lead melody fragment improvised from the
-//      current chord's scale, phrased around chord tones on downbeats
-//      and passing tones off the beat.
+//   1. Fixed 4-chord progressions (chosen per 16-bar section from a
+//      pool) give the ear a phrase to hold on to. Progressions are
+//      diatonic in D dorian so the site's whole audio system (chat
+//      chimes, achievement fanfares, unlock SFX) stays in-key.
 //
-// Nothing is a fixed loop. The Markov walker prefers tasteful
-// resolutions (IV→VII→III, ii→v→i, VII→III turnarounds) but
-// surprises the ear often enough that no 8-bar phrase ever feels
-// identical to a past one.
+//   2. A per-section melodic **motif** — 8 scale-degree notes — is
+//      drawn once and then developed: bar 1 plays it straight, bar 2
+//      same, bar 3 transposed up a third, bar 4 ornamented with
+//      passing tones. This gives music memorable hooks that repeat
+//      with variation instead of a random walk every bar.
 //
-// Swing eighths (~16% delay on offbeat), ~96 bpm. Scheduler is still
-// the Web Audio clock; everything below is the material generator.
+//   3. A 4-section super-cycle (intro → build → drop → breakdown)
+//      orchestrates which voices play, with intensity mapped to a
+//      cosine density curve inside each section. The drop is the
+//      payoff — full drums + arp + lead + pumped pad.
+//
+//   4. Sidechain pump: the melodic bus ducks ~40% on every kick and
+//      springs back over the beat, which is the canonical EDM "pump"
+//      feel. No actual compressor math — just a gain envelope keyed
+//      to kick hits.
+//
+// Voices are hardware-synth-flavored: supersaw pad (7 detuned sawtooth
+// voices summed with chorus), resonant-filter saw lead, saw+square
+// arp with lowpass cutoff sweep, sine-drop kick, filtered-noise hat
+// and snare, sub-bass sine. All synthesized live in Web Audio.
+//
+// Straight 16ths at 120 BPM. No swing — EDM is rhythmically rigid on
+// purpose. Scheduler is still the Web Audio clock; everything below
+// is the material generator.
 
-const BPM = 96;
-const BEAT = 60 / BPM;
-const STEP = BEAT / 2;
+const BPM = 120;
+const BEAT = 60 / BPM;               // quarter note
+const STEP = BEAT / 4;               // 16th note — base scheduling unit
+const BAR_STEPS = 16;                // 16 × 16th = 1 bar in 4/4
 
 // D dorian scale root + semitone intervals.
 // Scale degrees: 0=D, 1=E, 2=F, 3=G, 4=A, 5=B, 6=C (then repeats).
@@ -69,173 +81,83 @@ function degHz(d: number): number {
   return DORIAN_BASE_HZ * Math.pow(2, (DORIAN_STEPS[mod] + oct * 12) / 12);
 }
 
-// Seven diatonic chord functions plus one borrowed bII for color.
-// Each entry is: root scale-degree + the tones (as scale-degree offsets
-// from the root) that can appear in a voicing. The voicing picker then
-// chooses which tones to actually sound.
-type ChordFn = {
-  root: number;               // scale degree (0..6) of the root
-  tones: number[];            // offsets from root (scale steps): 0=root, 2=3rd, 4=5th, 6=7th, 8=9th, 10=11th, 12=13th
-  quality: "min" | "maj" | "dim" | "dom";
-};
-const FNS: Record<string, ChordFn> = {
-  i:   { root: 0, tones: [0, 2, 4, 6, 8],     quality: "min" }, // Dm9
-  ii:  { root: 1, tones: [0, 2, 4, 6, 8],     quality: "min" }, // Em11
-  III: { root: 2, tones: [0, 2, 4, 6, 8],     quality: "maj" }, // Fmaj9
-  IV:  { root: 3, tones: [0, 2, 4, 6, 8, 10], quality: "dom" }, // G13
-  v:   { root: 4, tones: [0, 2, 4, 6, 8],     quality: "min" }, // Am11
-  vi:  { root: 5, tones: [0, 2, 4, 6],        quality: "dim" }, // Bm7b5
-  VII: { root: 6, tones: [0, 2, 4, 6, 8],     quality: "maj" }, // Cmaj9
-};
-
-// Markov transitions — weights hand-tuned so cycle-of-fourths motion
-// and deceptive cadences both show up regularly, while consecutive
-// duplicates stay rare. Each entry: [next function, weight].
-const TRANSITIONS: Record<string, [string, number][]> = {
-  i:   [["IV", 3.0], ["VII", 2.4], ["v", 1.8], ["ii", 1.5], ["III", 1.2], ["vi", 0.6], ["i", 0.4]],
-  ii:  [["v", 3.0], ["IV", 2.0], ["VII", 1.8], ["i", 1.4], ["III", 1.0], ["ii", 0.3]],
-  III: [["IV", 2.2], ["VII", 2.2], ["i", 1.8], ["ii", 1.0], ["vi", 0.8], ["III", 0.3]],
-  IV:  [["VII", 2.8], ["III", 2.0], ["i", 1.8], ["ii", 1.4], ["v", 1.0], ["IV", 0.3]],
-  v:   [["i", 3.0], ["IV", 1.6], ["VII", 1.4], ["ii", 1.2], ["III", 1.0], ["v", 0.3]],
-  vi:  [["v", 2.4], ["VII", 2.0], ["ii", 1.4], ["i", 1.8], ["III", 0.6]],
-  VII: [["III", 2.6], ["i", 2.4], ["IV", 1.8], ["vi", 1.0], ["ii", 1.0], ["VII", 0.3]],
-};
-
-function pickWeighted<T>(opts: [T, number][], rnd: () => number): T {
-  let total = 0;
-  for (const [, w] of opts) total += w;
-  let r = rnd() * total;
-  for (const [v, w] of opts) { r -= w; if (r <= 0) return v; }
-  return opts[opts.length - 1][0];
-}
-
-// Instantiate a chord into concrete sounding material for one bar.
-// `voicingId` picks which tones go into which octaves; the different
-// voicings (close / spread / quartal / rootless) keep successive bars
-// from sounding identical even if the Markov walker revisits a chord.
-type BarMaterial = {
-  fnName: string;
-  root: number;                 // scale degree (0..6)
-  padNotes: number[];           // frequencies
-  scaleHz: number[];            // 8 scale tones in two-octave window
-  scaleDeg: number[];           // matching scale-degree seeds for lead
-  quality: ChordFn["quality"];
-};
-
-function voiceChord(fnName: string, voicingId: number): BarMaterial {
-  const fn = FNS[fnName] || FNS.i;
-  const root = fn.root;
-
-  // Build the chord tones at absolute scale-degree positions.
-  // tones[i] are degree offsets from root (0=root, 2=3rd, etc.)
-  const absTones = fn.tones.map((t) => root + t);
-
-  let pad: number[];
-  switch (voicingId % 4) {
-    case 0: // Close voicing from octave 0-1
-      pad = absTones.slice(0, 5).map((d) => degHz(d));
-      break;
-    case 1: // Spread — root in octave -1, rest in 1
-      pad = [
-        degHz(absTones[0] - 7),
-        ...absTones.slice(1, 5).map((d) => degHz(d + 7)),
-      ];
-      break;
-    case 2: // Quartal — stack fourths from the root
-      pad = [0, 3, 6, 9, 12].map((i) => degHz(absTones[0] + i));
-      break;
-    case 3: // Rootless — drop the root, emphasize 3 / 7 / 9 / 11 / 13
-    default:
-      pad = absTones.slice(1).map((d) => degHz(d + 7));
-      break;
-  }
-
-  // Two-octave scale window anchored around the chord root, shifted
-  // upward to keep the lead in a bright register.
-  const scaleDeg: number[] = [];
-  for (let i = 0; i < 8; i++) scaleDeg.push(root + 7 + i); // +7 = one octave up
-  const scaleHz = scaleDeg.map((d) => degHz(d));
-
-  return { fnName, root, padNotes: pad, scaleHz, scaleDeg, quality: fn.quality };
-}
-
-// Bass walks: 4 quarter-notes per bar. Returned as scale-degree
-// indices so we can compute frequencies with chord context at
-// schedule time.
-type BassPattern = "desc7" | "asc7" | "pedal" | "chromatic" | "scalar";
-const BASS_PATTERNS: [BassPattern, number][] = [
-  ["desc7", 2], ["asc7", 1.6], ["pedal", 1], ["chromatic", 1.4], ["scalar", 1.5],
-];
-function bassWalk(root: number, pat: BassPattern, nextRoot: number): number[] {
-  const r = root - 14; // 2 octaves below the lead window
-  switch (pat) {
-    case "desc7":     return [r, r + 6, r + 4, r + 2];
-    case "asc7":      return [r, r + 2, r + 4, r + 6];
-    case "pedal":     return [r, r + 4, r, r + 4];
-    case "scalar":    return [r, r + 1, r + 2, r + 3];
-    case "chromatic": {
-      // End with a chromatic approach into the next chord's root.
-      const approach = (nextRoot - 14) - 1; // one semitone below (approximate via scalar-1)
-      return [r, r + 4, r + 2, approach];
-    }
-  }
-}
-
-// Arpeggio phrases — 8-step patterns, indices into the scale window.
-// `null` = rest (breathing space).
-type ArpPhrase = (number | null)[];
-const ARP_PHRASES: [ArpPhrase, number][] = [
-  [[0, 2, 4, null, 3, 5, 2, null], 2.0],
-  [[0, 4, 2, null, 5, 3, 7, null], 1.6],
-  [[0, 2, null, 4, null, 3, 5, null], 1.2],
-  [[null, 2, 4, 0, null, 3, 5, 2], 1.4],
-  [[0, 2, 4, 2, null, 3, null, 5], 1.0],
-  [[0, null, 4, null, 3, null, 5, null], 0.8],
+// 4-chord progression pool — each entry is 4 scale-degree indices,
+// one per bar of a 4-bar phrase. All diatonic in D dorian (0=D, 1=E,
+// 2=F, 3=G, 4=A, 5=B, 6=C). Drawn per 16-bar section so the ear gets
+// a phrase to hold onto; repeats 4x inside the section. These are the
+// kind of loops that feel EDM-classic: i-v-bVI-bVII style, some
+// uplifting i-III-IV-v, and a sadder i-VI-v-VII for breakdowns.
+const PROGRESSIONS: number[][] = [
+  [0, 6, 2, 3],  // Dm → Cmaj → Fmaj → Gmaj   (classic rising, IV lift)
+  [0, 4, 2, 6],  // Dm → Am   → Fmaj → Cmaj   (intro-feeling, resolved)
+  [0, 3, 5, 6],  // Dm → Gmaj → Bm7b5 → Cmaj (modal, tension-release)
+  [0, 2, 4, 6],  // Dm → Fmaj → Am → Cmaj    (all-thirds, hooky)
+  [0, 6, 4, 3],  // Dm → Cmaj → Am → Gmaj    (descending bassline)
+  [0, 3, 6, 4],  // Dm → Gmaj → Cmaj → Am    (driving, club-ready)
 ];
 
-// Generate a sparse improvised 4-bar melody over the chord. Returns a
-// list of (step-in-4-bar-phrase, scale-degree-above-root, duration) —
-// the scheduler places each against real ctx time when the right step
-// lands. Notes land on strong beats biased toward chord tones; off-beat
-// notes weight toward passing tones (odd scale degrees).
-//
-// Density shapes how many notes appear (3..6) and how adventurous the
-// intervals get. Phrase length is 32 steps (4 bars × 8 eighths).
-function generateLeadPhrase(
-  mat: BarMaterial,
-  density: number,
-  rnd: () => number
-): Array<{ at: number; deg: number; dur: number }> {
-  const notes: Array<{ at: number; deg: number; dur: number }> = [];
-  // Chord tones (deg offsets from the bar's root, one octave above).
-  const chordDegs = [0, 2, 4, 6];
-  const passing = [1, 3, 5];
-  const count = 3 + Math.floor(rnd() * (density > 0.8 ? 4 : 3)); // 3..5 (or 6 at peak)
+function pickInt(n: number, rnd: () => number): number {
+  return Math.floor(rnd() * n);
+}
 
-  // Reserve spots: one on bar 1 beat 1, one on bar 3 beat 1, rest scattered.
-  const reserved = [0, 16];
-  const scattered: number[] = [];
-  while (scattered.length < count - reserved.length) {
-    const step = Math.floor(rnd() * 32);
-    if (scattered.includes(step) || reserved.includes(step)) continue;
-    scattered.push(step);
-  }
-  const slots = [...reserved, ...scattered].sort((a, b) => a - b);
+// Melodic motifs — 8 scale-degree offsets, one per 8th note across a
+// single bar. `null` = rest (breathing space). The motif is chosen
+// per 16-bar section; across its four appearances inside the section
+// we (1) play it straight, (2) play it again, (3) transpose up a
+// third, (4) ornament with neighbor tones — giving the motif a little
+// development arc rather than flat repetition.
+type Motif = (number | null)[];
+const MOTIFS: Motif[] = [
+  [0, 2, 4, 2, null, 4, 2, 0],       // anchored arc
+  [0, null, 4, 2, 0, 4, null, 2],    // syncopated
+  [0, 4, 2, null, 4, 2, null, 0],    // call-response
+  [0, 2, 4, 7, 4, 2, 0, null],       // octave reach + descent
+  [2, 4, 2, 0, null, 0, 2, 4],       // upswing
+  [4, 2, 0, null, 0, 2, 4, 2],       // descending then pivot
+  [0, 2, null, 4, null, 2, 4, 0],    // sparse / airy
+  [0, 4, 2, 0, 4, 2, 0, null],       // insistent, trance-y
+];
 
-  for (const at of slots) {
-    const onStrong = at % 4 === 0;
-    const pool = onStrong ? chordDegs : (rnd() < 0.65 ? chordDegs : passing);
-    let deg = pool[Math.floor(rnd() * pool.length)];
-    // Occasional octave jump or chromatic neighbor for color.
-    if (rnd() < 0.12) deg += 7;
-    if (rnd() < 0.08) deg -= 1;
-    // Duration: mostly eighths, sometimes dotted-eighths, rare
-    // quarter-and-a-half for held phrase endings.
-    const durRoll = rnd();
-    const durSteps = durRoll < 0.65 ? 1 : durRoll < 0.9 ? 1.5 : 3;
-    notes.push({ at, deg, dur: durSteps });
+// Section type drives orchestration:
+//   intro     — pad + sub only; motif whispered once per chord
+//   build     — add hat + kick (half-time) + motif more present
+//   drop      — full: kick (4-on-the-floor) + snare + hat + arp + lead
+//   breakdown — strip back: pad + lead + sparse hat
+// A super-cycle is 4 sections = 64 bars, then repeats with a fresh
+// progression + motif.
+type SectionKind = "intro" | "build" | "drop" | "breakdown";
+const SECTION_CYCLE: SectionKind[] = ["intro", "build", "drop", "breakdown"];
+
+// Chord → voicing helpers. `rootDeg` is the scale-degree index (0..6)
+// of the chord root within D dorian. Chord tones (triad + 7th + 9th)
+// are derived by stacking thirds from the scale.
+function chordRootHz(rootDeg: number): number {
+  return degHz(rootDeg);
+}
+function chordTonesHz(rootDeg: number, opts: { seventh?: boolean; ninth?: boolean }): number[] {
+  const triad = [rootDeg, rootDeg + 2, rootDeg + 4];
+  if (opts.seventh) triad.push(rootDeg + 6);
+  if (opts.ninth)   triad.push(rootDeg + 8);
+  return triad.map(degHz);
+}
+
+// Returns a per-bar ornamented motif. Bar 0 = straight motif. Bar 1 =
+// same. Bar 2 = transposed up a third (scale step +2). Bar 3 =
+// original with a passing tone inserted on one of the null steps.
+function motifForBar(base: Motif, bar: number, rnd: () => number): Motif {
+  if (bar % 4 === 0 || bar % 4 === 1) return base;
+  if (bar % 4 === 2) return base.map((n) => n === null ? null : n + 2);
+  // bar === 3: ornament — replace a random rest with a passing tone.
+  const out: Motif = base.slice();
+  const rests: number[] = [];
+  for (let i = 0; i < out.length; i++) if (out[i] === null) rests.push(i);
+  if (rests.length > 0) {
+    const pick = rests[Math.floor(rnd() * rests.length)];
+    // Choose a passing tone close to the surrounding melody.
+    const neighbor = (out[(pick + out.length - 1) % out.length] ?? 0) + (rnd() < 0.5 ? 1 : -1);
+    out[pick] = neighbor;
   }
-  return notes;
+  return out;
 }
 
 class SoundEngine {
@@ -249,6 +171,11 @@ class SoundEngine {
   // to master, which made them quieter than the music they were
   // supposed to punch through.
   private sfxBus: GainNode | null = null;
+  // Music sub-buses. Drums route through drumBus straight to the
+  // music bus. Melodic voices (pad / arp / sub / lead) route through
+  // melodicBus, which gets sidechain-pumped on every kick hit.
+  private drumBus: GainNode | null = null;
+  private melodicBus: GainNode | null = null;
   private musicRunning = false;
   private nextScheduleAt = 0; // next beat time (absolute, ctx.currentTime scale)
   private beatIndex = 0;
@@ -520,6 +447,18 @@ class SoundEngine {
     bus.connect(this.master);
     this.musicBus = bus;
 
+    // Sub-buses: drums bypass sidechain; melodic voices go through
+    // melodicBus which gets ducked on every kick (the EDM pump).
+    const drumBus = ctx.createGain();
+    drumBus.gain.value = 1.0;
+    drumBus.connect(bus);
+    this.drumBus = drumBus;
+
+    const melodicBus = ctx.createGain();
+    melodicBus.gain.value = 1.0;
+    melodicBus.connect(bus);
+    this.melodicBus = melodicBus;
+
     // Fade-in over 2s — audible quickly after unlock, but still a
     // deliberate ramp so music doesn't punch in at full volume like a
     // pop-up alert. Suppressed? Keep silent; the release fn returned
@@ -610,299 +549,351 @@ class SoundEngine {
   }
 
   // --- composer state ---
-  // Reset when the engine starts fresh; persists across bars so each
-  // new bar is "next" in a sequence rather than a cold draw.
+  // Resets when the engine starts. Persists across bars so material
+  // drawn per-section survives the per-step dispatch inside the bar.
   private composer = {
-    fnName: "i" as string,
-    lastFn: "" as string,
-    material: null as BarMaterial | null,
-    nextMaterial: null as BarMaterial | null,
-    bassPattern: "desc7" as BassPattern,
-    arpPhrase: ARP_PHRASES[0][0] as ArpPhrase,
-    sectionBar: 0,                      // 0..15 position in current section
-    section: 0,                         // section counter
-    density: 0.5,                       // 0..1, what's playing
-    leadPhrase: [] as Array<{ at: number; deg: number; dur: number }>, // relative timings within a 4-bar phrase
-    leadBar: 0,                         // 0..3 within the current 4-bar phrase
+    progression: PROGRESSIONS[0],
+    motif: MOTIFS[0] as Motif,
+    sectionKind: "intro" as SectionKind,
+    sectionIdx: 0,                      // 0..3 within the super-cycle
+    sectionBar: 0,                      // 0..15 within the section
+    bar: 0,                             // running bar counter (session total)
+    // Pending material for the current bar, filled on bar boundary
+    // and dispatched over the next 16 steps.
+    rootDeg: 0,
+    barMotif: [] as Motif,
   };
 
-  // Called on bar boundary (inBar === 0). Advances section state,
-  // picks the next chord, regenerates voicings + patterns + (on 4-bar
-  // marks) a lead phrase. All randomness is pulled from Math.random
-  // so each session draws a unique score.
+  // Called on bar boundary. Advances the super-cycle, picks the
+  // chord/motif/progression per section, then fixes the per-bar motif
+  // (with development across the 4-bar phrase).
   private planNextBar(): void {
     const c = this.composer;
 
-    // Section-level density curve. 16 bars per section, density
-    // follows a smooth cosine window so the listener gets recognizable
-    // rise/fall shapes without a hard on/off feel. The absolute floor
-    // and ceiling drift slowly so no two sections sound identical.
-    const sectionProg = c.sectionBar / 16;
-    const sectionFloor = 0.2 + 0.15 * Math.sin(c.section * 0.7);
-    const sectionCeil  = 0.85 + 0.1  * Math.sin(c.section * 0.53 + 1.2);
-    const curve = 0.5 - 0.5 * Math.cos(sectionProg * Math.PI * 2);
-    c.density = sectionFloor + (sectionCeil - sectionFloor) * curve;
-
-    // Pick next chord via Markov walk. Avoid the exact same 2-chord
-    // alternation (X→Y→X→Y) by re-rolling once if that pattern appears.
-    let candidate = pickWeighted(TRANSITIONS[c.fnName] || [["i", 1]], Math.random);
-    if (candidate === c.lastFn && Math.random() < 0.6) {
-      candidate = pickWeighted(TRANSITIONS[c.fnName] || [["i", 1]], Math.random);
-    }
-    c.lastFn = c.fnName;
-    c.fnName = candidate;
-
-    // New voicing each bar so revisits don't sound copied.
-    const voicingId = Math.floor(Math.random() * 4);
-    c.material = voiceChord(c.fnName, voicingId);
-
-    // Peek ahead for chromatic bass approach.
-    const peekNext = pickWeighted(TRANSITIONS[c.fnName] || [["i", 1]], Math.random);
-    c.nextMaterial = voiceChord(peekNext, Math.floor(Math.random() * 4));
-
-    // Bass + arp patterns. Slight bias toward repeating the arpeggio
-    // across 2-bar pairs (musical phrasing) but always freshly drawn
-    // on bar 1 of each 4-bar phrase.
-    c.bassPattern = pickWeighted(BASS_PATTERNS, Math.random);
-    if (c.sectionBar % 4 === 0) {
-      c.arpPhrase = pickWeighted(ARP_PHRASES, Math.random);
-    }
-
-    // On each 4-bar phrase boundary (if density high enough) draft
-    // a lead melody — a tiny improvised line that sits over the next
-    // 4 bars. Store as (offset-in-steps, scale-degree, duration)
-    // tuples so the scheduler can place them against real ctx time.
-    if (c.sectionBar % 4 === 0 && c.density > 0.55) {
-      c.leadPhrase = generateLeadPhrase(c.material, c.density, Math.random);
-      c.leadBar = 0;
-    }
-    if (c.sectionBar % 4 !== 0) c.leadBar++;
-
-    // Advance section counter.
-    c.sectionBar = (c.sectionBar + 1) % 16;
-    if (c.sectionBar === 0) c.section++;
-  }
-
-  // Eighth-note scheduler. Plans a new bar on every bar boundary,
-  // then dispatches per-voice material to the sound engine.
-  private scheduleBeat(step: number, at: number): void {
-    const barLen = 8;
-    const inBar = step % barLen;
-    const c = this.composer;
-
-    if (inBar === 0) this.planNextBar();
-    const mat = c.material;
-    if (!mat) return;
-
-    // Swing: offbeats delayed ~16% of a step.
-    const swingT = inBar % 2 === 1 ? at + STEP * 0.16 : at;
-
-    // --- pad ---
-    // Swells on every bar 1. Voicing was freshly picked in planNextBar.
-    if (inBar === 0) this.playPad(mat.padNotes, at);
-
-    // --- walking bass ---
-    // 4 quarter notes per bar (= every 2 steps).
-    if (inBar % 2 === 0) {
-      const notes = bassWalk(
-        mat.root,
-        c.bassPattern,
-        c.nextMaterial ? c.nextMaterial.root : mat.root
-      );
-      const bi = inBar / 2;
-      this.playBass(degHz(notes[bi]), at);
-    }
-
-    // --- vibraphone arpeggio ---
-    // Only plays if section density is past the threshold — sparse
-    // intros breathe without arpeggiation, peak sections fill in.
-    if (c.density > 0.35) {
-      const arpIdx = c.arpPhrase[inBar];
-      if (arpIdx !== null && arpIdx !== undefined) {
-        // Occasionally transpose the phrase up an octave for a "lift".
-        const shift = c.density > 0.7 && Math.random() < 0.18 ? 1 : 0;
-        const hz = mat.scaleHz[arpIdx] * (shift ? 2 : 1);
-        this.playVibes(hz, swingT);
+    // On each 16-bar section boundary, advance the cycle and redraw
+    // material. Every fourth section (end of super-cycle) we reseed
+    // the progression and motif so the score keeps generating new
+    // phrases rather than looping.
+    if (c.sectionBar === 0) {
+      c.sectionKind = SECTION_CYCLE[c.sectionIdx % 4];
+      if (c.sectionIdx % 4 === 0) {
+        // Super-cycle start: fresh progression + motif.
+        c.progression = PROGRESSIONS[pickInt(PROGRESSIONS.length, Math.random)];
+        c.motif       = MOTIFS[pickInt(MOTIFS.length, Math.random)];
       }
     }
 
-    // --- brushed backbeat ---
-    // Tick on 2 & 4 when density warrants. Skip on ultra-sparse intros.
-    if (c.density > 0.45 && (inBar === 2 || inBar === 6)) {
-      this.playBrush(swingT);
+    // Each chord holds for 4 bars within the section. Four chords = 16
+    // bars. Index into the progression by (sectionBar / 4).
+    const chordIdx = Math.floor(c.sectionBar / 4) % 4;
+    c.rootDeg = c.progression[chordIdx];
+
+    // Develop the motif across the 4-bar chord span (bars 0,1,2,3).
+    const barWithinChord = c.sectionBar % 4;
+    c.barMotif = motifForBar(c.motif, barWithinChord, Math.random);
+
+    // Advance counters.
+    c.bar++;
+    c.sectionBar = (c.sectionBar + 1) % 16;
+    if (c.sectionBar === 0) c.sectionIdx = (c.sectionIdx + 1) % 4;
+  }
+
+  // 16th-note scheduler. Dispatches per-voice material to the sound
+  // engine. `step` is the absolute 16th-note index from musicRunning.
+  private scheduleBeat(step: number, at: number): void {
+    const inBar = step % BAR_STEPS;
+    const c = this.composer;
+
+    if (inBar === 0) this.planNextBar();
+    const root = c.rootDeg;
+    const kind = c.sectionKind;
+
+    // -------- drums --------
+    // Kick policy by section:
+    //   intro     — kick on bar 1 only (foreshadow)
+    //   build     — kick on beats 1 and 3 (half-time)
+    //   drop      — 4-on-the-floor (beats 1,2,3,4)
+    //   breakdown — kick on beats 1 and 3; accent on last bar
+    const onQuarter = inBar % 4 === 0;            // beats 1,2,3,4
+    const onBeat13  = inBar === 0 || inBar === 8; // beats 1 and 3
+    let kick = false;
+    if (kind === "intro")     kick = c.sectionBar % 4 === 0 && inBar === 0;
+    if (kind === "build")     kick = onBeat13;
+    if (kind === "drop")      kick = onQuarter;
+    if (kind === "breakdown") kick = onBeat13 || (c.sectionBar === 15 && inBar === 12);
+    if (kick) this.playKick(at);
+
+    // Snare/clap on beats 2 and 4 whenever drums are in. Light intro
+    // variant: drop the snare entirely.
+    const onBeat24 = inBar === 4 || inBar === 12;
+    if (onBeat24 && (kind === "build" || kind === "drop")) this.playSnare(at);
+
+    // Closed hats on every offbeat once we're past intro. 8th-note
+    // offbeats = steps 2,6,10,14 (the "and" of each beat). During the
+    // drop, double up to 16th-note hats for drive.
+    const on8thOffbeat  = inBar % 4 === 2;
+    const on16thHat     = inBar % 2 === 0; // every other 16th
+    if (kind === "build"     && on8thOffbeat) this.playHat(at, 0.045);
+    if (kind === "breakdown" && on8thOffbeat) this.playHat(at, 0.035);
+    if (kind === "drop"      && on16thHat)    this.playHat(at, 0.04);
+
+    // Sidechain pump: duck the melodic bus on every kick. Even in
+    // breakdown/intro with sparse kicks, this keeps the characteristic
+    // EDM pump feel locked to the beat.
+    if (kick) this.pumpMelodicBus(at);
+
+    // -------- sub bass --------
+    // Held root note for the full bar with a slight re-trigger on
+    // beat 3 for movement. Breakdowns use a longer sustained note.
+    if (inBar === 0) this.playSub(chordRootHz(root - 7), at, kind === "breakdown" ? BEAT * 4 : BEAT * 2);
+    if (inBar === 8 && kind !== "breakdown") this.playSub(chordRootHz(root - 7), at, BEAT * 2);
+
+    // -------- pad --------
+    // Sustained chord, swells in on every 4-bar chord boundary.
+    if (c.sectionBar % 4 === 0 && inBar === 0) {
+      const pad = chordTonesHz(root, { seventh: true, ninth: kind !== "intro" });
+      this.playPad(pad, at);
     }
 
-    // --- glockenspiel sparkle ---
-    // Last 2 steps of a 4-bar phrase if density is high, stochastic
-    // drop-outs so it doesn't become clockwork.
-    if (c.density > 0.6 && c.sectionBar % 4 === 3 && inBar >= 5 && Math.random() < 0.55) {
-      const pick = mat.scaleHz[Math.min(mat.scaleHz.length - 1, 5 + (inBar % 3))];
-      this.playSparkle(pick * 2, swingT);
+    // -------- arpeggio --------
+    // Only during build and drop. Fast 16th-note saw arp through the
+    // chord tones with a filter sweep baked per-note.
+    if (kind === "build" || kind === "drop") {
+      const density = kind === "drop" ? 1.0 : 0.5;
+      // Build plays arp on every 2nd 16th; drop plays every 16th.
+      const shouldPlay = (kind === "drop") || (inBar % 2 === 0);
+      if (shouldPlay && Math.random() < 0.5 + 0.5 * density) {
+        const chordDegs = [0, 2, 4, 6, 8];
+        const deg = chordDegs[inBar % chordDegs.length];
+        this.playArpNote(degHz(root + 7 + deg), at, STEP * 1.1);
+      }
     }
 
-    // --- lead melody ---
-    // A sparse line sitting above the arpeggio. Triggered from the
-    // leadPhrase we drafted at the 4-bar mark. We match by step
-    // within the 4-bar window so it locks to the bar structure.
-    if (c.density > 0.7 && c.leadPhrase.length > 0) {
-      const stepIn4Bar = c.leadBar * barLen + inBar;
-      for (const note of c.leadPhrase) {
-        if (note.at === stepIn4Bar) {
-          const hz = degHz(mat.root + 7 + note.deg);
-          this.playLead(hz, swingT, note.dur);
+    // -------- lead melody --------
+    // Plays the motif on 8th-note subdivisions (every other 16th
+    // step). Sections decide whether to play and how loud.
+    if (inBar % 2 === 0) {
+      const motifSlot = inBar / 2; // 0..7
+      const motifNote = c.barMotif[motifSlot];
+      if (motifNote !== null && motifNote !== undefined) {
+        const leadOn = kind === "drop" || kind === "breakdown" || (kind === "build" && c.sectionBar >= 8);
+        if (leadOn) {
+          const leadHz = degHz(root + 7 + motifNote);
+          const leadDur = STEP * (kind === "breakdown" ? 3 : 1.8);
+          this.playLead(leadHz, at, leadDur / STEP);
         }
       }
     }
   }
 
+  // Supersaw pad — 7 detuned sawtooth voices summed through a slow
+  // lowpass sweep. Classic trance/progressive EDM pad texture. Held
+  // for 4 bars (one per chord). Attack slow enough to feel like it
+  // blooms into position; release tail overlaps the next chord's
+  // attack for smooth transitions.
   private playPad(notes: number[], at: number): void {
     const ctx = this.ctx!;
-    const bus = this.musicBus;
+    const bus = this.melodicBus;
     if (!bus) return;
-    const dur = BEAT * 4 + 0.4;
-    // Tremolo on the pad via slow gain LFO for that rhodes/EP shimmer.
+    const dur = BEAT * 16 + 0.6; // 4 bars + tail
+
     const lp = ctx.createBiquadFilter();
     lp.type = "lowpass";
-    lp.frequency.value = 2200;
-    lp.Q.value = 0.5;
+    lp.frequency.setValueAtTime(900, at);
+    lp.frequency.linearRampToValueAtTime(2600, at + 1.5);
+    lp.frequency.linearRampToValueAtTime(1800, at + dur);
+    lp.Q.value = 0.9;
     lp.connect(bus);
 
-    const tremGain = ctx.createGain();
-    tremGain.gain.setValueAtTime(0.0001, at);
-    tremGain.gain.exponentialRampToValueAtTime(0.18, at + 0.55);
-    tremGain.gain.setValueAtTime(0.18, at + dur - 0.7);
-    tremGain.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-    tremGain.connect(lp);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.linearRampToValueAtTime(0.085, at + 0.8);          // slow bloom
+    g.gain.setValueAtTime(0.085, at + dur - 0.9);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    g.connect(lp);
 
-    const lfo = ctx.createOscillator();
-    lfo.frequency.value = 4.6;
-    const lfoAmt = ctx.createGain();
-    lfoAmt.gain.value = 0.04;
-    lfo.connect(lfoAmt);
-    lfoAmt.connect(tremGain.gain);
-    lfo.start(at);
-    lfo.stop(at + dur + 0.1);
+    // Gentle tremolo so the pad doesn't feel static.
+    const trem = ctx.createOscillator();
+    trem.frequency.value = 0.35;
+    const tremAmt = ctx.createGain();
+    tremAmt.gain.value = 0.012;
+    trem.connect(tremAmt);
+    tremAmt.connect(g.gain);
+    trem.start(at);
+    trem.stop(at + dur + 0.1);
 
+    // 7 detuned saws per note — supersaw stack.
+    const detunes = [-14, -9, -5, 0, 5, 9, 14];
     for (const f of notes) {
-      for (const d of [-7, 7]) {
+      for (const d of detunes) {
         const o = ctx.createOscillator();
-        o.type = "sine";
+        o.type = "sawtooth";
         o.frequency.value = f;
         o.detune.value = d;
-        o.connect(tremGain);
+        const voiceGain = ctx.createGain();
+        voiceGain.gain.value = 0.14;
+        o.connect(voiceGain);
+        voiceGain.connect(g);
         o.start(at);
         o.stop(at + dur + 0.05);
       }
     }
     if (this.reverb) {
       const send = ctx.createGain();
-      send.gain.value = 0.55;
+      send.gain.value = 0.4;
       lp.connect(send);
       send.connect(this.reverb);
     }
   }
 
-  private playBass(freq: number, at: number): void {
+  // Sub bass — deep sine + filtered saw octave-up for presence. Held
+  // for a musical duration (half a bar by default).
+  private playSub(freq: number, at: number, duration: number): void {
     const ctx = this.ctx!;
-    const bus = this.musicBus;
+    const bus = this.melodicBus;
     if (!bus) return;
-    const dur = BEAT * 0.9;
+
     const lp = ctx.createBiquadFilter();
     lp.type = "lowpass";
-    lp.frequency.value = 700;
-    lp.Q.value = 1.1;
+    lp.frequency.value = 500;
+    lp.Q.value = 0.8;
     lp.connect(bus);
+
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, at);
-    g.gain.exponentialRampToValueAtTime(0.24, at + 0.008);
-    g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    g.gain.exponentialRampToValueAtTime(0.3, at + 0.01);
+    g.gain.setValueAtTime(0.3, at + duration - 0.1);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + duration);
     g.connect(lp);
-    // Sine + triangle octave-up for definition.
-    const o1 = ctx.createOscillator();
-    o1.type = "sine";
-    o1.frequency.value = freq;
-    o1.connect(g);
-    const o2 = ctx.createOscillator();
-    o2.type = "triangle";
-    o2.frequency.value = freq * 2;
-    const g2 = ctx.createGain();
-    g2.gain.value = 0.3;
-    o2.connect(g2);
-    g2.connect(g);
-    o1.start(at); o2.start(at);
-    o1.stop(at + dur + 0.05); o2.stop(at + dur + 0.05);
+
+    const sub = ctx.createOscillator();
+    sub.type = "sine";
+    sub.frequency.value = freq * 0.5; // one octave below the passed freq
+    sub.connect(g);
+    const body = ctx.createOscillator();
+    body.type = "triangle";
+    body.frequency.value = freq;
+    const bodyG = ctx.createGain();
+    bodyG.gain.value = 0.35;
+    body.connect(bodyG);
+    bodyG.connect(g);
+
+    sub.start(at); body.start(at);
+    sub.stop(at + duration + 0.05);
+    body.stop(at + duration + 0.05);
   }
 
-  // Vibraphone voice: FM-ish (carrier sine + fast-decay modulator) with a
-  // subtle vibrato on the carrier for that shimmering cocktail feel.
-  private playVibes(freq: number, at: number): void {
+  // Kick drum — pitch-drop sine plus a noise "click" at the onset.
+  private playKick(at: number): void {
     const ctx = this.ctx!;
-    const bus = this.musicBus;
+    const bus = this.drumBus;
     if (!bus) return;
-    const dur = STEP * 2.5;
-
-    const carrier = ctx.createOscillator();
-    carrier.type = "sine";
-    carrier.frequency.value = freq;
-
-    // Vibrato LFO → carrier detune
-    const vib = ctx.createOscillator();
-    vib.frequency.value = 5.5;
-    const vibAmt = ctx.createGain();
-    vibAmt.gain.value = 8; // cents
-    vib.connect(vibAmt);
-    vibAmt.connect(carrier.detune);
-
-    // Modulator for metallic overtone
-    const mod = ctx.createOscillator();
-    mod.type = "sine";
-    mod.frequency.value = freq * 3;
-    const modAmt = ctx.createGain();
-    modAmt.gain.setValueAtTime(freq * 1.2, at);
-    modAmt.gain.exponentialRampToValueAtTime(0.01, at + 0.25);
-    mod.connect(modAmt);
-    modAmt.connect(carrier.frequency);
 
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, at);
-    g.gain.exponentialRampToValueAtTime(0.11, at + 0.008);
-    g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-    carrier.connect(g);
+    g.gain.exponentialRampToValueAtTime(0.7, at + 0.003);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.28);
     g.connect(bus);
 
-    carrier.start(at); mod.start(at); vib.start(at);
-    carrier.stop(at + dur + 0.05);
-    mod.stop(at + dur + 0.05);
-    vib.stop(at + dur + 0.05);
+    // Sine with a fast downward sweep for thump.
+    const body = ctx.createOscillator();
+    body.type = "sine";
+    body.frequency.setValueAtTime(180, at);
+    body.frequency.exponentialRampToValueAtTime(45, at + 0.09);
+    body.connect(g);
+    body.start(at);
+    body.stop(at + 0.3);
 
-    if (this.reverb) {
-      const send = ctx.createGain();
-      send.gain.value = 0.6;
-      g.connect(send);
-      send.connect(this.reverb);
-    }
+    // Click layer — 3ms of filtered noise for the transient.
+    const sr = ctx.sampleRate;
+    const clickLen = Math.floor(sr * 0.01);
+    const clickBuf = ctx.createBuffer(1, clickLen, sr);
+    const cd = clickBuf.getChannelData(0);
+    for (let i = 0; i < clickLen; i++) cd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickLen, 3);
+    const click = ctx.createBufferSource();
+    click.buffer = clickBuf;
+    const clickFilt = ctx.createBiquadFilter();
+    clickFilt.type = "bandpass";
+    clickFilt.frequency.value = 4000;
+    clickFilt.Q.value = 0.7;
+    const clickG = ctx.createGain();
+    clickG.gain.value = 0.18;
+    click.connect(clickFilt);
+    clickFilt.connect(clickG);
+    clickG.connect(bus);
+    click.start(at);
+    click.stop(at + 0.02);
   }
 
-  // Brushed-snare-ish swish for backbeat.
-  private playBrush(at: number): void {
+  // Snare — bandpassed noise burst + a quick tone body.
+  private playSnare(at: number): void {
     const ctx = this.ctx!;
-    const bus = this.musicBus;
+    const bus = this.drumBus;
     if (!bus) return;
-    const dur = 0.12;
+    const dur = 0.16;
     const sr = ctx.sampleRate;
     const len = Math.floor(sr * dur);
     const buf = ctx.createBuffer(1, len, sr);
     const d = buf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 1.6);
+
     const src = ctx.createBufferSource();
     src.buffer = buf;
     const filt = ctx.createBiquadFilter();
     filt.type = "bandpass";
-    filt.frequency.value = 6500;
-    filt.Q.value = 1.4;
+    filt.frequency.value = 1800;
+    filt.Q.value = 1.0;
+
     const g = ctx.createGain();
-    g.gain.setValueAtTime(0.05, at);
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(0.26, at + 0.003);
     g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+
+    src.connect(filt);
+    filt.connect(g);
+    g.connect(bus);
+    src.start(at);
+    src.stop(at + dur + 0.02);
+
+    // Tone body for more "snap".
+    const tone = ctx.createOscillator();
+    tone.type = "triangle";
+    tone.frequency.setValueAtTime(220, at);
+    tone.frequency.exponentialRampToValueAtTime(120, at + 0.06);
+    const tg = ctx.createGain();
+    tg.gain.setValueAtTime(0.0001, at);
+    tg.gain.exponentialRampToValueAtTime(0.1, at + 0.003);
+    tg.gain.exponentialRampToValueAtTime(0.0001, at + 0.12);
+    tone.connect(tg);
+    tg.connect(bus);
+    tone.start(at);
+    tone.stop(at + 0.14);
+  }
+
+  // Closed hi-hat — short filtered noise. `level` scales peak so the
+  // scheduler can pick half-loudness hats for breakdown sections.
+  private playHat(at: number, level: number = 0.045): void {
+    const ctx = this.ctx!;
+    const bus = this.drumBus;
+    if (!bus) return;
+    const dur = 0.035;
+    const sr = ctx.sampleRate;
+    const len = Math.floor(sr * dur);
+    const buf = ctx.createBuffer(1, len, sr);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const filt = ctx.createBiquadFilter();
+    filt.type = "highpass";
+    filt.frequency.value = 7500;
+    filt.Q.value = 0.9;
+
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(level, at);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+
     src.connect(filt);
     filt.connect(g);
     g.connect(bus);
@@ -910,7 +901,70 @@ class SoundEngine {
     src.stop(at + dur + 0.02);
   }
 
-  // Glockenspiel-ish sparkle — bright, tiny.
+  // Arp note — single saw with a steep lowpass-cutoff envelope. This
+  // is the canonical "plucky" synth-arp character. Short envelope so
+  // fast 16th sequences stay clean.
+  private playArpNote(freq: number, at: number, duration: number): void {
+    const ctx = this.ctx!;
+    const bus = this.melodicBus;
+    if (!bus) return;
+
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.Q.value = 6.0; // resonant
+    lp.frequency.setValueAtTime(5500, at);
+    lp.frequency.exponentialRampToValueAtTime(700, at + duration);
+    lp.connect(bus);
+
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(0.13, at + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+    g.connect(lp);
+
+    const saw = ctx.createOscillator();
+    saw.type = "sawtooth";
+    saw.frequency.value = freq;
+    const sq = ctx.createOscillator();
+    sq.type = "square";
+    sq.frequency.value = freq * 0.5;
+    const sqG = ctx.createGain();
+    sqG.gain.value = 0.25;
+    sq.connect(sqG);
+    sqG.connect(g);
+    saw.connect(g);
+
+    saw.start(at); sq.start(at);
+    saw.stop(at + duration + 0.02);
+    sq.stop(at + duration + 0.02);
+
+    if (this.reverb) {
+      const send = ctx.createGain();
+      send.gain.value = 0.22;
+      g.connect(send);
+      send.connect(this.reverb);
+    }
+  }
+
+  // Sidechain pump — ducks the melodicBus gain sharply on kick and
+  // springs it back over ~0.28s. The classic EDM "breathing" feel.
+  // Safe to call even when music is suppressed; the melodicBus is
+  // separate from the suppression gain staging on musicBus.
+  private pumpMelodicBus(at: number): void {
+    const ctx = this.ctx;
+    const mb = this.melodicBus;
+    if (!ctx || !mb) return;
+    try {
+      mb.gain.cancelScheduledValues(at);
+      mb.gain.setValueAtTime(1.0, at);
+      mb.gain.linearRampToValueAtTime(0.38, at + 0.04);
+      mb.gain.linearRampToValueAtTime(1.0,  at + 0.28);
+    } catch {}
+  }
+
+  // Optional glockenspiel/sparkle one-shot — used by UI (achievement
+  // fanfare) not by the music composer. Kept around because the
+  // UI palette calls it for the high-bell tail of sound.achievement().
   private playSparkle(freq: number, at: number): void {
     const ctx = this.ctx!;
     const bus = this.musicBus;
@@ -940,61 +994,68 @@ class SoundEngine {
   // ramps in over the first 40% of the note (like a singer leaning
   // into a held tone). `durSteps` is in eighth-note steps; we convert
   // to seconds via STEP.
+  // Lead synth — hardware-flavored saw through a resonant lowpass with
+  // a filter-cutoff bloom envelope. Routes through melodicBus so the
+  // sidechain pump applies (on each kick the lead ducks with the pad).
   private playLead(freq: number, at: number, durSteps: number): void {
     const ctx = this.ctx!;
-    const bus = this.musicBus;
+    const bus = this.melodicBus;
     if (!bus) return;
     const dur = Math.max(0.18, durSteps * STEP);
 
     const lp = ctx.createBiquadFilter();
     lp.type = "lowpass";
-    lp.frequency.value = 1600;
-    lp.Q.value = 1.2;
+    lp.Q.value = 3.2;                               // resonant
+    lp.frequency.setValueAtTime(1200, at);
+    lp.frequency.exponentialRampToValueAtTime(3800, at + dur * 0.25);
+    lp.frequency.linearRampToValueAtTime(1400, at + dur);
     lp.connect(bus);
 
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, at);
-    g.gain.linearRampToValueAtTime(0.055, at + 0.05);        // slow bloom
-    g.gain.setValueAtTime(0.055, at + dur - 0.12);
+    g.gain.exponentialRampToValueAtTime(0.14, at + 0.015);   // fast attack
+    g.gain.setValueAtTime(0.14, at + dur - 0.12);
     g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
     g.connect(lp);
 
-    // Sawtooth body + sine sub an octave down for warmth.
-    const o1 = ctx.createOscillator();
-    o1.type = "sawtooth";
-    o1.frequency.value = freq;
+    // Detuned double-saw for width + a sub sine for body.
+    const saw1 = ctx.createOscillator();
+    saw1.type = "sawtooth";
+    saw1.frequency.value = freq;
+    saw1.detune.value = -7;
+    const saw2 = ctx.createOscillator();
+    saw2.type = "sawtooth";
+    saw2.frequency.value = freq;
+    saw2.detune.value = +7;
+    const sub = ctx.createOscillator();
+    sub.type = "sine";
+    sub.frequency.value = freq * 0.5;
+    const subG = ctx.createGain();
+    subG.gain.value = 0.28;
+    sub.connect(subG);
+    subG.connect(g);
 
-    const o2 = ctx.createOscillator();
-    o2.type = "sine";
-    o2.frequency.value = freq * 0.5;
-    const o2g = ctx.createGain();
-    o2g.gain.value = 0.35;
-    o2.connect(o2g);
-    o2g.connect(g);
-
-    // Delayed vibrato → mimics a player leaning on a sustained note.
+    // Light vibrato ramping in on held notes so sustained tones don't
+    // feel dead.
     const vib = ctx.createOscillator();
-    vib.frequency.value = 4.8;
+    vib.frequency.value = 5.5;
     const vibAmt = ctx.createGain();
     vibAmt.gain.setValueAtTime(0, at);
-    vibAmt.gain.linearRampToValueAtTime(6, at + dur * 0.4); // cents
+    vibAmt.gain.linearRampToValueAtTime(7, at + dur * 0.4); // cents
     vib.connect(vibAmt);
-    vibAmt.connect(o1.detune);
+    vibAmt.connect(saw1.detune);
+    vibAmt.connect(saw2.detune);
 
-    // Filter sweep opens as the note blooms, closes as it fades.
-    lp.frequency.setValueAtTime(1100, at);
-    lp.frequency.linearRampToValueAtTime(2400, at + dur * 0.35);
-    lp.frequency.linearRampToValueAtTime(1300, at + dur);
-
-    o1.connect(g);
-    o1.start(at); o2.start(at); vib.start(at);
-    o1.stop(at + dur + 0.05);
-    o2.stop(at + dur + 0.05);
+    saw1.connect(g); saw2.connect(g);
+    saw1.start(at); saw2.start(at); sub.start(at); vib.start(at);
+    saw1.stop(at + dur + 0.05);
+    saw2.stop(at + dur + 0.05);
+    sub.stop(at + dur + 0.05);
     vib.stop(at + dur + 0.05);
 
     if (this.reverb) {
       const send = ctx.createGain();
-      send.gain.value = 0.55;
+      send.gain.value = 0.35;
       g.connect(send);
       send.connect(this.reverb);
     }
