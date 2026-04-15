@@ -369,6 +369,7 @@ runtime → parent:
   { type: "loveweb:save:read",           path, reqId }
   { type: "loveweb:log",                 level, msg }
   { type: "loveweb:achievement:unlock",  key, meta }
+  { type: "loveweb:quit",                status, reason }
 ```
 
 Achievement unlocks also support a **magic-print** escape hatch for Lua
@@ -376,6 +377,17 @@ code that doesn't want to touch the JS bridge directly: emitting
 `print("[[LOVEWEB_ACH]]unlock <key>")` from Lua is intercepted by the
 runtime's stdout hook and forwarded as a `loveweb:achievement:unlock`
 message. See [Achievements](#achievements) for the full spec.
+
+### Clean exit — `love.event.quit()`
+
+The runtime shell wires `Module.quit`, `Module.onExit`, and
+`Module.onAbort` so `love.event.quit()` from Lua flows out as a single
+`loveweb:quit` message to the parent. `GameRunner` responds by playing a
+confirm chime, overlaying a "session :: ended" card over the canvas, and
+router-pushing back to `/` after ~1.4s — zero postMessage plumbing
+required on the game side. An always-visible "↩ exit" handle over the
+top-right of the iframe (plus a full button in the status bar) serves as
+a hard escape hatch if the Lua runtime itself has frozen.
 
 The `GameRunner` React component holds the parent side of the bridge in
 `src/components/GameRunner.tsx`.
@@ -439,13 +451,26 @@ Server-Sent Events fanning out from Vercel KV:
 
 1. Authenticates via Auth.js session cookie; 401 if not signed in.
 2. Opens a `ReadableStream` with SSE headers.
-3. Emits `event: hello` + a backfill of the last 20 messages per
-   channel from `LRANGE stream:<ch> 0 19` (decoded from `@vercel/kv`'s
-   auto-parsed JSON).
-4. Loops: every 1 second, checks `GET seq:<ch>`. If the counter
-   advanced, `LRANGE` the delta and emit `event: chat` frames.
+3. Emits `event: hello` + a backfill of the last ~20 messages per
+   channel — from `LRANGE stream:<ch> 0 19` on the KV path, or from
+   `chat_messages` ordered by id on the Postgres fallback path.
+4. Poll loop with adaptive backoff:
+   - KV path: one `MGET` collapses every channel's `seq:*` into a
+     single command per poll; on any advance, `LRANGE` the delta
+     and emit `event: chat` frames. Base 1.5 s cadence when active,
+     exponential idle back-off up to 10 s.
+   - Postgres fallback: triggered transparently if KV is down or
+     throws (e.g. Upstash's free-tier 500k/day cap). Polls
+     `chat_messages` by an id watermark at 1.2 s active / 8 s idle.
+     Delivery stays correct; latency degrades from ~1.5 s → ~1.2 s
+     (the DB path is actually snappier, just "spendier" per client).
 5. Sends `: ping` comments every 15 s to keep the connection warm.
 6. Auto-closes on client disconnect; the client reconnects in 2 s.
+
+The send path (`POST /api/chat/send`) persists to Postgres first and
+treats KV fanout as best-effort — so a KV outage doesn't swallow
+messages, and the sender's own row optimistically appends to the
+local feed from the send response.
 
 Vercel function `maxDuration` is set to 300 s in `vercel.json` for this
 route on Pro; Hobby plans cap it at 60 s. The client transparently
@@ -467,6 +492,16 @@ everywhere they appear — chat, stats hero, top bar). The message body
 is syntax-highlighted in a bash-terminal palette: URLs as links,
 `` `code` `` in amber, `"strings"` in green, `@mentions` in magenta,
 `#channels` in yellow, `/commands` in red, numbers in purple.
+
+**Per-user chimes.** Incoming messages play `sound.notifyAs(handle)` —
+an FNV-1a hash of the sender's handle selects a pitch in D dorian
+(two-octave range), so every operator has a recognizable tone that
+still lands musically against the ambient soundtrack. Fresh messages
+also trigger a brief accent-colored border flash (`.chat-msg[data-fresh="true"]`
+animates for 900 ms) and a short haptic vibration on mobile. Chat
+history is hard-gated behind auth on the client too — unauthenticated
+visitors see only an "uplink sealed" callout, never any handles or
+message bodies.
 
 Handles are **clickable** and link to `/u/<handle>` — a public profile
 page with full GitHub-derived bio and 30-day stats.
@@ -526,6 +561,15 @@ Authenticated. Aggregates the current user's data:
 Server component that looks up a user by handle or github_login, pulls
 the same aggregate queries (no auth required), and renders the stats
 hero + charts. All handles in chat link here.
+
+### Leaderboard rank medallions
+
+The rank column is tier-aware: **podium** (1–3) gets a large numeral
+with a breathing glow in the medal color (gold / silver / bronze) and
+a single-pass shimmer sweep on render, **high** (4–10) gets a medium
+purple-glowed numeral, and **low** (11+) stays subdued. Tie-break
+order now prioritizes achievement points: playtime → achievement
+points → sessions → messages → user id.
 
 ### Charts
 
@@ -635,6 +679,13 @@ Toasts auto-dismiss after ~5 s (click to dismiss early), stack up to 3,
 fire **only on fresh unlocks** (replays are silent no-ops), and honor
 `prefers-reduced-motion`. Implementation: `src/components/AchievementToast.tsx`
 + the `.ach-toast*` / `.ach-tile*` CSS in `src/app/globals.css`.
+
+**Verifying the pipeline without a real unlock:** append
+`?_test_toast=<rarity>` to any game URL (e.g.
+`/games/claude-mythos?_test_toast=legendary`) to fire a synthetic toast
+~1.5 s after load. Purely portal-side — no DB writes, no persistence.
+Useful for preview / QA passes and for game authors checking that their
+accent color reads well through the toast chrome.
 
 ### Why not a DB-backed catalog?
 

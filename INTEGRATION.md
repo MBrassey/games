@@ -186,6 +186,30 @@ Recommended: use the same slug the portal uses for your game entry.
 
 ---
 
+## Clean exit — `love.event.quit()`
+
+Calling `love.event.quit()` from Lua is a **first-class clean-exit
+signal** to the portal, not just an internal loop break. The portal:
+
+1. Detects the exit via emscripten's `Module.quit` / `onExit` hooks
+   (the runtime shell wires all three paths, so any love.js build
+   version works).
+2. Plays a short confirm chime.
+3. Shows a brief "session :: ended" overlay over the canvas.
+4. Router-pushes the player back to the library (`/`) automatically
+   after ~1.4 s.
+
+This means any in-game "quit to main menu" or "exit" button that
+calls `love.event.quit()` just works on the portal — the player lands
+back at the library with a clean UX. No postMessage plumbing
+required.
+
+An always-visible escape hatch is also rendered by the portal over
+every game frame (a small floating "↩ exit" handle in the top-right
+of the canvas plus a full "exit game" button in the status bar
+below), so the player is never stranded even if the Lua runtime
+itself has frozen.
+
 ## `main.lua` — boot order and callbacks
 
 Standard LÖVE lifecycle applies:
@@ -238,6 +262,15 @@ canvas is then sized by `love.js` to match the iframe dimensions.
 Concretely: you'll be rendering at anything from ~600×340 (narrow
 mobile) to ~1920×1080 (desktop widescreen). **Design for 1920×1080 as
 your logical resolution, then scale.**
+
+### Frame backlight
+
+The iframe automatically gets a CRT-bloom backlight tinted by your
+game's `accentColor` (from the portal's `src/lib/games.ts` entry) —
+a breathing radial glow behind the frame plus a layered box-shadow
+rim. Nothing to wire up on the game side; just pick a nice accent
+color in your portal-registration PR and your game inherits the
+treatment.
 
 Canonical pattern — render the world to an offscreen canvas at your
 logical resolution, then blit with uniform scaling:
@@ -669,6 +702,7 @@ table.
 | `loveweb:save:read`             | `{ path, reqId }`                                       | Requests a cloud save file on-demand.                   |
 | `loveweb:log`                   | `{ level, msg }`                                        | Routed from Lua `print`/`printErr`.                     |
 | `loveweb:achievement:unlock`    | `{ key, meta }`                                         | Produced by the `[[LOVEWEB_ACH]]unlock` magic print.    |
+| `loveweb:quit`                  | `{ status, reason }`                                    | Clean-exit signal — emitted by the runtime shell when `love.event.quit()` flows through Module.quit / onExit. Parent overlays a "session ended" card and routes back to the library. |
 
 From Lua you interact with this protocol via:
 
@@ -746,6 +780,23 @@ pnpm dev
 Iterate: change Lua → `pnpm build:games your-slug` → refresh browser.
 
 ---
+
+## Verifying the toast pipeline without a real unlock
+
+Append `?_test_toast=<rarity>` to any game URL to pop a synthetic
+achievement toast ~1.5 s after load. Fires the full visual + sound
+pipeline (glint sweep, breathing pulse, fanfare chord) end-to-end so
+you can confirm the portal wiring is alive without needing a real
+catalog entry or an in-game trigger:
+
+```
+https://games.brassey.io/games/<slug>?_test_toast=common
+https://games.brassey.io/games/<slug>?_test_toast=uncommon
+https://games.brassey.io/games/<slug>?_test_toast=rare
+https://games.brassey.io/games/<slug>?_test_toast=legendary
+```
+
+It's portal-only — no persistence, no DB writes. Pure UI preview.
 
 ## Smoke testing
 
