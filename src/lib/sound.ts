@@ -182,6 +182,8 @@ class SoundEngine {
   private schedulerTimer: number | null = null;
   private enabled = false;
   private lastHover = 0;
+  private lastHoverVariant = -1;
+  private lastClickVariant = -1;
 
   // Refcounted music suppression. softMuteMusic() (called from the game
   // page) bumps this; its returned release fn decrements. Any count > 0
@@ -1063,71 +1065,180 @@ class SoundEngine {
 
   // --- the palette ---
 
-  /** Primary action click: plastic-snap noise + bandpassed square with a
-   *  small pitch drop. Routes through sfxBus at unity gain so the snap
-   *  reads clearly over the ambient bed. */
+  /** Pick a variant index that isn't the same as the previous call.
+   *  Breaks up the feel-of-same when the user scans UI rapidly. */
+  private nextVariant(count: number, last: number): number {
+    if (count <= 1) return 0;
+    let v = Math.floor(Math.random() * count);
+    if (v === last) v = (v + 1) % count;
+    return v;
+  }
+
+  /** Primary action click — terran-console button press. Rotates through
+   *  three tonal variants (short bleeps/arpeggios, not percussive ticks)
+   *  so consecutive clicks never sound identical. All variants in D
+   *  dorian so they sit cohesively with the soundtrack. */
   click(): void {
     this.resumeIfNeeded();
     if (!this.enabled) return;
     const ctx = this.ctx!;
     const t = ctx.currentTime;
-    this.playNoise({
-      duration: 0.028, peak: 0.24,
-      filter: { type: "highpass", freq: 1800, Q: 0.8 },
-      startAt: t,
-    });
-    this.playOsc({
-      freq: 880, freqEnd: 520, type: "square",
-      attack: 0.003, decay: 0.1, peak: 0.3,
-      filter: { type: "bandpass", freq: 1400, Q: 2.8 },
-      reverbSend: 0.5, startAt: t,
-    });
-    // Bright high tick right at the onset — this is the "pop" of a
-    // physical terran-console button press.
-    this.playOsc({
-      freq: 3200, type: "sine",
-      attack: 0.001, decay: 0.04, peak: 0.12,
-      filter: { type: "highpass", freq: 2500 },
-      reverbSend: 0.3, startAt: t,
-    });
+    const variant = this.nextVariant(3, this.lastClickVariant);
+    this.lastClickVariant = variant;
+
+    if (variant === 0) {
+      // "Acknowledged" — two-note rising arpeggio A5 → E6, bright
+      // square with a brief noise onset.
+      this.playNoise({
+        duration: 0.02, peak: 0.18,
+        filter: { type: "highpass", freq: 2800 },
+        startAt: t,
+      });
+      this.playOsc({
+        freq: 880, type: "square",
+        attack: 0.002, decay: 0.08, peak: 0.22,
+        filter: { type: "lowpass", freq: 3200, Q: 2 },
+        reverbSend: 0.35, startAt: t,
+      });
+      this.playOsc({
+        freq: 1318.51, type: "square",
+        attack: 0.002, decay: 0.1, peak: 0.22,
+        filter: { type: "lowpass", freq: 4000, Q: 2 },
+        reverbSend: 0.45, startAt: t + 0.05,
+      });
+    } else if (variant === 1) {
+      // "Select" — downward bip C6 → A5, plasticky square with a
+      // sharp high tick on top.
+      this.playOsc({
+        freq: 1046.5, freqEnd: 880, type: "square",
+        attack: 0.002, decay: 0.09, peak: 0.26,
+        filter: { type: "bandpass", freq: 1800, Q: 2.4 },
+        reverbSend: 0.4, startAt: t,
+      });
+      this.playOsc({
+        freq: 3520, type: "sine",
+        attack: 0.001, decay: 0.03, peak: 0.14,
+        filter: { type: "highpass", freq: 2500 },
+        reverbSend: 0.3, startAt: t,
+      });
+      this.playNoise({
+        duration: 0.015, peak: 0.12,
+        filter: { type: "highpass", freq: 4000 },
+        startAt: t,
+      });
+    } else {
+      // "Switch" — staccato major-third stab E6 + G#6 stacked,
+      // triangle body + square punch. Reads as a hard flip.
+      this.playOsc({
+        freq: 1318.51, type: "triangle",
+        attack: 0.002, decay: 0.08, peak: 0.28,
+        filter: { type: "lowpass", freq: 3800 },
+        reverbSend: 0.4, startAt: t,
+      });
+      this.playOsc({
+        freq: 1661.22, type: "square",
+        attack: 0.002, decay: 0.06, peak: 0.12,
+        filter: { type: "bandpass", freq: 2200, Q: 3.2 },
+        reverbSend: 0.5, startAt: t,
+      });
+      this.playNoise({
+        duration: 0.018, peak: 0.14,
+        filter: { type: "highpass", freq: 3200 },
+        startAt: t,
+      });
+    }
     this.duckMusic(0.4, 0.22);
   }
 
-  /** Hover acknowledge — short upward chirp + noise tick with a
-   *  terran-console "tink" on top. Routes through the dedicated sfxBus
-   *  at unity gain so it sits clearly over the music bed. Rate-limited
-   *  to ~55 ms so scanning across a dense UI stays snappy without
-   *  machine-gunning. */
+  /** Hover acknowledge — four-variant pool of short tonal bleeps with
+   *  Starcraft-Terran-console character. Not a percussive tick; each
+   *  variant is a brief synthesized voice (~80-120ms) in D dorian with
+   *  a distinct pitch + contour so consecutive hovers read as varied
+   *  rather than identical. Rate-limited to ~45ms so dense scanning
+   *  still feels snappy. */
   hover(): void {
     this.resumeIfNeeded();
     if (!this.enabled) return;
     const ctx = this.ctx!;
     const now = ctx.currentTime;
-    if (now - this.lastHover < 0.055) return;
+    if (now - this.lastHover < 0.045) return;
     this.lastHover = now;
-    // Upward chirp — 1400 → 2200 Hz over 80 ms. Square-ish tone for
-    // a brighter, more metallic read; triangle was reading soft.
-    this.playOsc({
-      freq: 1400, freqEnd: 2200, type: "triangle",
-      attack: 0.002, decay: 0.1, peak: 0.32,
-      filter: { type: "bandpass", freq: 2400, Q: 1.6 },
-      reverbSend: 0.3,
-    });
-    // Stacked detuned voice one octave up for air/shimmer. Quiet and
-    // higher than the chirp's band so it reads as a "halo" over the tone.
-    this.playOsc({
-      freq: 2800, freqEnd: 4400, type: "sine",
-      attack: 0.002, decay: 0.08, peak: 0.14,
-      filter: { type: "highpass", freq: 2200 },
-      reverbSend: 0.45,
-    });
-    // Short noise snap — gives it the "tink" of a real UI click.
-    this.playNoise({
-      duration: 0.022, peak: 0.16,
-      filter: { type: "highpass", freq: 3000 },
-    });
-    // Duck the music for 180 ms so the SFX punches through — no-op
-    // on game pages where music is suppressed.
+    const variant = this.nextVariant(4, this.lastHoverVariant);
+    this.lastHoverVariant = variant;
+    const t = now;
+
+    // Small random detune on every variant so even repeated hits on
+    // the same variant don't sound bit-identical.
+    const jitter = (Math.random() - 0.5) * 14; // ±7 cents
+
+    if (variant === 0) {
+      // V0: Upward chirp A5 → E6, sine + square blend. The "bip" that
+      //     anchors the palette.
+      this.playOsc({
+        freq: 880, freqEnd: 1318.51, type: "sine",
+        attack: 0.002, decay: 0.09, peak: 0.3,
+        filter: { type: "lowpass", freq: 3500, Q: 1.4 },
+        reverbSend: 0.35, startAt: t, detune: jitter,
+      });
+      this.playOsc({
+        freq: 880, freqEnd: 1318.51, type: "square",
+        attack: 0.002, decay: 0.07, peak: 0.08,
+        filter: { type: "bandpass", freq: 2200, Q: 2.2 },
+        reverbSend: 0.45, startAt: t, detune: jitter,
+      });
+    } else if (variant === 1) {
+      // V1: Two-note "bip-bop" E6 → G6, ultra-short sine. Fastest of
+      //     the pool; reads as "focus acknowledged".
+      this.playOsc({
+        freq: 1318.51, type: "sine",
+        attack: 0.001, decay: 0.04, peak: 0.28,
+        filter: { type: "lowpass", freq: 3800 },
+        reverbSend: 0.4, startAt: t, detune: jitter,
+      });
+      this.playOsc({
+        freq: 1567.98, type: "sine",
+        attack: 0.001, decay: 0.05, peak: 0.22,
+        filter: { type: "lowpass", freq: 4200 },
+        reverbSend: 0.45, startAt: t + 0.03, detune: jitter,
+      });
+    } else if (variant === 2) {
+      // V2: Single G5 pulse with a filter sweep — Terran "console
+      //     blip". Body is triangle; bandpass sweep gives it that
+      //     electrostatic pluck character.
+      this.playOsc({
+        freq: 783.99, type: "triangle",
+        attack: 0.002, decay: 0.1, peak: 0.32,
+        filter: { type: "bandpass", freq: 1600, Q: 3 },
+        reverbSend: 0.4, startAt: t, detune: jitter,
+      });
+      this.playOsc({
+        freq: 1567.98, type: "sine",
+        attack: 0.001, decay: 0.05, peak: 0.12,
+        filter: { type: "highpass", freq: 2000 },
+        reverbSend: 0.5, startAt: t + 0.005, detune: jitter,
+      });
+    } else {
+      // V3: Downward C6 → A5 with a hint of noise — "readout tick".
+      //     Slightly longer; used as a "resting" contrast to the
+      //     rising variants.
+      this.playOsc({
+        freq: 1046.5, freqEnd: 880, type: "sine",
+        attack: 0.002, decay: 0.11, peak: 0.26,
+        filter: { type: "lowpass", freq: 3200, Q: 1.8 },
+        reverbSend: 0.35, startAt: t, detune: jitter,
+      });
+      this.playOsc({
+        freq: 2093, freqEnd: 1760, type: "sine",
+        attack: 0.002, decay: 0.07, peak: 0.1,
+        filter: { type: "highpass", freq: 1800 },
+        reverbSend: 0.5, startAt: t, detune: jitter,
+      });
+      this.playNoise({
+        duration: 0.012, peak: 0.08,
+        filter: { type: "highpass", freq: 4000 },
+        startAt: t,
+      });
+    }
     this.duckMusic(0.55, 0.18);
   }
 
