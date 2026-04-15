@@ -121,7 +121,7 @@ Portal code: [CC0](./LICENSE). Games: each under its own license.
 12. [Achievements](#achievements)
 13. [Audio engine](#audio-engine)
 14. [Visual theme and effects](#visual-theme-and-effects)
-15. [Adding a new game](#adding-a-new-game)
+15. [Adding a new game](#adding-a-new-game) · see also [INTEGRATION.md](./INTEGRATION.md)
 16. [Local development](#local-development)
 17. [Vercel setup](#vercel-setup)
 18. [GitHub OAuth](#github-oauth)
@@ -718,6 +718,13 @@ scanning across the UI doesn't machine-gun.
 
 ## Adding a new game
 
+> Building a brand-new LÖVE2D game targeted at this portal?
+> Start with **[INTEGRATION.md](./INTEGRATION.md)** — full guide covering
+> repo layout, Lua 5.1 / love.js constraints, rendering, input, audio,
+> saves, achievements, and a copy-paste starter skeleton. Designed to
+> be read once (by a human or AI agent) and then followed as a
+> checklist.
+
 Append one entry to the `GAMES` array in `src/lib/games.ts`:
 
 ```ts
@@ -954,6 +961,7 @@ wiring.
 ```
 games/
 ├── README.md                          ◀ this file
+├── INTEGRATION.md                     ◀ full game-author integration guide
 ├── LICENSE                            ◀ CC0 1.0 Universal (public domain)
 ├── package.json                       scripts (dev/build/db:migrate/build:games)
 ├── pnpm-lock.yaml
