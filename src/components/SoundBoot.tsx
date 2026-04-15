@@ -23,6 +23,23 @@ export default function SoundBoot() {
 
     if (mutedByUser) return () => { unbind(); };
 
+    // Eager silent-start attempt. Audio defaults to ON — only mute
+    // explicitly turns it off — so we ask the engine to resume on
+    // mount. This works for:
+    //   • Returning users whose browser has granted the site media-
+    //     engagement autoplay permission (Chrome after repeat visits).
+    //   • SPA navigations within a session that already unlocked
+    //     audio on a previous page (the AudioContext survives across
+    //     Next route changes).
+    //
+    // If the browser blocks the resume (first-ever load, no gesture
+    // yet), `enable({ silent: true })` is a no-op that won't set
+    // `enabled` to true — we'll retry on the first real gesture below,
+    // at which point a normal (non-silent) enable plays the boot chime
+    // and starts music. The `silent` flag prevents the startup chime
+    // from firing on every SPA navigation.
+    void sound.enable({ silent: true });
+
     // Keep the engage listeners attached for the component's lifetime
     // instead of removing them after the first gesture. Two reasons:
     //
@@ -43,10 +60,23 @@ export default function SoundBoot() {
     window.addEventListener("keydown", engage, true);
     window.addEventListener("touchstart", engage, true);
 
+    // Tab-visibility restore: if the browser auto-suspended our context
+    // while the tab was backgrounded, bring it back the moment the tab
+    // becomes visible again rather than waiting for the user's next
+    // click. No gesture needed here — we're just resuming an already-
+    // unlocked context.
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void sound.enable({ silent: true });
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       window.removeEventListener("pointerdown", engage, true);
       window.removeEventListener("keydown", engage, true);
       window.removeEventListener("touchstart", engage, true);
+      document.removeEventListener("visibilitychange", onVisibility);
       unbind();
     };
   }, []);

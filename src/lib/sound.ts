@@ -317,13 +317,27 @@ class SoundEngine {
     return this.enabled;
   }
 
-  async enable(): Promise<void> {
+  async enable(options?: { silent?: boolean }): Promise<void> {
     const ctx = this.ensure();
     if (!ctx) return;
-    if (ctx.state === "suspended") await ctx.resume();
+    if (ctx.state === "suspended") {
+      try { await ctx.resume(); } catch { /* browsers can throw if no
+        gesture has happened yet — we silently retry on the next
+        engage path, see SoundBoot.tsx */ }
+    }
+    // Only consider the engine truly enabled if the context is actually
+    // running. Eager mount calls (no gesture yet) typically leave ctx
+    // in "suspended" despite a resolved resume() promise; treating that
+    // as "enabled" would otherwise schedule audio events that never
+    // make sound.
+    if (ctx.state !== "running") return;
     if (!this.enabled) {
       this.enabled = true;
-      this.boot();
+      // `silent: true` is used by the eager auto-mount path so users
+      // don't get a startup chime every time they navigate within the
+      // SPA. The mute-button "unmute" flow still fires the chime, since
+      // that IS an explicit "turn audio on" action worth acknowledging.
+      if (!options?.silent) this.boot();
       this.startMusic();
     }
   }
@@ -477,12 +491,12 @@ class SoundEngine {
     bus.connect(this.master);
     this.musicBus = bus;
 
-    // Fade-in over 6s — UNLESS music is currently suppressed (e.g. the
-    // user is on a game page). In that case we keep the bus silent;
-    // the release fn returned by softMuteMusic will ramp it up when
-    // the user navigates away.
+    // Fade-in over 2s — audible quickly after unlock, but still a
+    // deliberate ramp so music doesn't punch in at full volume like a
+    // pop-up alert. Suppressed? Keep silent; the release fn returned
+    // by softMuteMusic will ramp it up when the user navigates away.
     if (this.musicSuppressed === 0) {
-      bus.gain.linearRampToValueAtTime(this.MUSIC_TARGET, ctx.currentTime + 6);
+      bus.gain.linearRampToValueAtTime(this.MUSIC_TARGET, ctx.currentTime + 2);
     }
 
     this.musicRunning = true;
