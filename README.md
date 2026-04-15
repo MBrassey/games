@@ -14,8 +14,10 @@
 A dark-terminal portal for LÖVE2D games, running in the browser via
 [love.js](https://github.com/Davidobot/love.js). Features: GitHub sign-in,
 cross-device save sync, a global chat channel spanning every title,
-playtime telemetry, public per-user profiles, synthesized UI SFX, and a
-procedural ambient soundtrack.
+playtime telemetry, public per-user profiles, a game→portal UI-effects
+protocol (games can flash/shake/ripple/shatter the whole viewport),
+Steam-style live achievement toasts, synthesized UI SFX, and a
+procedural-EDM soundtrack that never repeats.
 
 Deployed at [games.brassey.io](https://games.brassey.io). Hosted on Vercel;
 Postgres via Neon, Redis via Upstash, auth via Auth.js (self-hosted
@@ -145,7 +147,8 @@ Portal code: [CC0](./LICENSE). Games: each under its own license.
 │         │                 │                  │                  │                │
 │         │  ┌──────────────┼──────────────────┼──────────────────┼───────────┐    │
 │         │  │                     Next.js 15 App Router                      │    │
-│         │  │  top bar · chat drawer · particle FX · procedural soundtrack   │    │
+│         │  │  top bar · chat drawer · particle FX · UiEffects overlay       │    │
+│         │  │  procedural-EDM soundtrack · SFX bus · shake/zoom wrapper      │    │
 │         │  └──────────────┬──────────────────┬──────────────────┬───────────┘    │
 │         │                 │                  │                  │                │
 │   ┌─────▼─────┐     ┌─────▼──────┐      ┌────▼─────┐      ┌─────▼──────┐         │
@@ -345,13 +348,19 @@ The modifications:
    `setStatus` had to be adjusted to do the same.
 2. `Module` is declared with `var` (not `const`) so `game.js` can
    re-declare + merge into it without a `SyntaxError`.
-3. A `preRun` hook pre-populates the Emscripten virtual FS (mounted at
-   `/home/web_user/.local/share/LOVE/<identity>/`) from cloud-stored
-   saves before `love.filesystem` reads anything.
+3. A `preRun` hook pre-populates the Emscripten virtual FS from
+   cloud-stored saves before `love.filesystem` reads anything.
+   love.js's save dir sits at `/home/web_user/love/<identity>/` — an
+   emscripten-specific flat layout (not the Linux
+   `~/.local/share/love/<id>/` XDG convention). The template's
+   `SAVE_ROOT` is `/home/web_user/love` and it walks one level deeper
+   to each game's identity dir.
 4. A `postRun` hook polls the save directory every 2 seconds, diffs
    `mtime`, and posts changes up to the parent.
 5. All LÖVE `print`/`printErr` output is routed to the parent via
-   `postMessage` as `loveweb:log` events.
+   `postMessage` as `loveweb:log` events. Two magic-print prefixes
+   are intercepted: `[[LOVEWEB_ACH]]` for achievement unlocks and
+   `[[LOVEWEB_FX]]` for runtime UI effects.
 
 ### Protocol
 
@@ -360,17 +369,28 @@ parent → runtime:
   { type: "loveweb:auth",                signedIn: boolean }
   { type: "loveweb:saves:manifest",      files: [{ path, updated_at }] }
   { type: "loveweb:save:data",           reqId, dataB64 | null }
-  { type: "loveweb:achievements:state",  unlocks: [{ key, unlockedAt, points }] }
+  { type: "loveweb:saves:list",          reqId, files: […] }
+  { type: "loveweb:achievements:state",  unlocks: [{ key, unlockedAt, points }], identity }
   { type: "loveweb:achievement:ack",     key, fresh, points }
 
 runtime → parent:
+  { type: "loveweb:hello",               game: slug }
   { type: "loveweb:ready",               game: slug }
   { type: "loveweb:save:write",          path, dataB64, meta }
   { type: "loveweb:save:read",           path, reqId }
+  { type: "loveweb:save:list",           reqId }
   { type: "loveweb:log",                 level, msg }
   { type: "loveweb:achievement:unlock",  key, meta }
+  { type: "loveweb:fx",                  verb, args[] }
   { type: "loveweb:quit",                status, reason }
 ```
+
+The `identity` field on `loveweb:achievements:state` is load-bearing —
+the runtime uses it to write the `__loveweb__/achievements.json` meta
+file *inside* the game's save-dir (so the game can read it with plain
+`love.filesystem.read(...)`). It's piped in from the game's
+`GameEntry.identity` in `src/lib/games.ts` (default: slug with
+dashes converted to underscores).
 
 Achievement unlocks also support a **magic-print** escape hatch for Lua
 code that doesn't want to touch the JS bridge directly: emitting
@@ -505,8 +525,11 @@ reconnects either way.
 
 ### Rendering
 
-The `ChatDrawer` is a semi-transparent (`bg-void-0/45 backdrop-blur-[2px]`)
-sidebar fixed to the right. The background particles drift through it.
+The `ChatDrawer` is a semi-transparent sidebar fixed to the right
+(vertical void gradient `from-void-0/35 via-void-0/20 to-void-0/35`
+with `backdrop-blur-[1px]`). Transparent enough that the
+`BackgroundFX` starfield drifts through the chat column while the
+chrome still has weight.
 
 Each message renders with a **rounded-square, glowing-border avatar**
 colored by a deterministic hash of the user's handle (same color
@@ -518,7 +541,8 @@ is syntax-highlighted in a bash-terminal palette: URLs as links,
 **Per-user chimes.** Incoming messages play `sound.notifyAs(handle)` —
 an FNV-1a hash of the sender's handle selects a pitch in D dorian
 (two-octave range), so every operator has a recognizable tone that
-still lands musically against the ambient soundtrack. Fresh messages
+still lands musically against the procedural-EDM soundtrack (same
+key). Fresh messages
 also trigger a brief accent-colored border flash (`.chat-msg[data-fresh="true"]`
 animates for 900 ms) and a short haptic vibration on mobile. Chat
 history is hard-gated behind auth on the client too — unauthenticated
@@ -587,11 +611,15 @@ hero + charts. All handles in chat link here.
 ### Leaderboard rank medallions
 
 The rank column is tier-aware: **podium** (1–3) gets a large numeral
-with a breathing glow in the medal color (gold / silver / bronze) and
-a single-pass shimmer sweep on render, **high** (4–10) gets a medium
-purple-glowed numeral, and **low** (11+) stays subdued. Tie-break
-order now prioritizes achievement points: playtime → achievement
-points → sessions → messages → user id.
+with a breathing glow in the medal color (gold / silver / bronze),
+**high** (4–10) gets a medium purple-glowed numeral, and **low**
+(11+) stays subdued. Every rank cell also runs a **continuous 10-second
+shimmer cycle** — a tier-colored highlight sweeps across the numeral
+for ~1.3 s, then idles for ~8.7 s. Rows stagger 0.7 s apart (set
+inline as `--shimmer-delay`), so the board ripples top-to-bottom like
+a slow neon sign rather than pulsing in unison. Tie-break order
+prioritizes achievement points: playtime → achievement points →
+sessions → messages → user id.
 
 ### Charts
 
@@ -727,67 +755,147 @@ No audio files. Single `SoundEngine` singleton (`src/lib/sound.ts`):
 
 ### SFX palette
 
-| Call               | Sound                                                  |
-|--------------------|--------------------------------------------------------|
-| `sound.hover()`    | Upward chirp 1400→2200 Hz + highpass noise tick        |
-| `sound.click()`    | Bandpassed square w/ pitch drop + noise snap           |
-| `sound.confirm()`  | Ascending two-note "affirmative"                       |
-| `sound.deny()`     | Descending sawtooth two-note                           |
-| `sound.notify()`   | FM-ish bell + noise snap (chat receive)                |
-| `sound.transition()` | Filter sweep on route changes                        |
-| `sound.boot()`     | 3-note startup chime                                   |
-| `sound.key()`      | Per-keystroke micro-tick                               |
+| Call                 | Sound                                                                      |
+|----------------------|----------------------------------------------------------------------------|
+| `sound.hover()`      | Upward chirp 1400→2200 Hz + octave-up "halo" sine + highpass noise tink    |
+| `sound.click()`      | Bandpassed square w/ pitch drop + noise snap + bright 3.2 kHz onset tick   |
+| `sound.confirm()`    | Ascending two-note "affirmative"                                           |
+| `sound.deny()`       | Descending sawtooth two-note                                               |
+| `sound.notify()`     | Neutral bell ping (delegates to `notifyAs(null)`)                          |
+| `sound.notifyAs(h)`  | Per-user bell — pitch derived from FNV-1a hash of handle in D dorian        |
+| `sound.achievement()`| D-major arpeggio 587→740→880→1175 Hz + high-bell tail (unlock fanfare)     |
+| `sound.transition()` | Filter sweep on route changes                                              |
+| `sound.boot()`       | 3-note startup chime                                                       |
+| `sound.key()`        | Per-keystroke micro-tick                                                   |
 
-Every SFX routes through a shared 200 ms convolution reverb built from
-a decaying noise impulse. The master bus sits at −6 dBFS.
+All UI SFX route through a dedicated `sfxBus` at unity gain (parallel
+to the music bus at 0.32) so hover/click/confirm cut clearly over the
+soundtrack without needing boosted peaks. Every SFX routes through a
+shared 200 ms convolution reverb built from a decaying noise impulse.
+The master bus sits at −6 dBFS (gain 0.55).
 
-### Procedural soundtrack
+### Procedural EDM soundtrack
 
-A **spaceship-casino ambience** scored in D dorian at 96 BPM with a
-swung feel:
+**Driving, melodic, hardware-synth-flavored.** 120 BPM, straight
+16ths (no swing), D dorian. Not a fixed loop — a three-tier
+procedural composer that never repeats while still generating real
+melodic hooks:
 
-- Progression: `Dm9 → G13 → Cmaj9 → Am11` (ii–V–I-ish), one bar each.
-- **Pad** — detuned sine voices per chord tone with a gentle 4.6 Hz
-  tremolo for that electric-piano shimmer.
-- **Walking bass** — one quarter note per beat, four per bar.
-- **Vibraphone arpeggio** — FM-synthesized (carrier sine + fast-decay
-  modulator) with 5.5 Hz vibrato, 8-step syncopated phrase.
-- **Brushed snare** — filtered noise on the backbeat (beats 2 & 4).
-- **Glockenspiel sparkle** — once per 4-bar phrase at the end.
+- **Per super-cycle (64 bars):** one 4-chord progression is drawn
+  from a pool of six (e.g. `Dm → C → F → G`, `Dm → Am → F → C`,
+  `Dm → Gmaj → Bm7b5 → Cmaj9`) plus one 8-note motif from a
+  pool of eight. The progression rides through the whole
+  super-cycle for cohesion; new progression + motif every 64 bars.
+- **Per 16-bar section:** orchestration shifts through a four-part
+  arc — **intro** (pad + sub only) → **build** (half-time kick +
+  hats, motif enters in second half) → **drop** (4-on-the-floor
+  kick + backbeat snare + 16th hats + full saw arp + lead motif)
+  → **breakdown** (pad + lead + sparse hats; let the hook breathe).
+- **Per 4-bar chord:** the motif develops rather than repeats
+  blindly — bar 0 & 1 play it straight, bar 2 transposes up a
+  third, bar 3 ornaments a rest slot with a neighbor tone.
+
+Hardware-flavored voices:
+
+- **Supersaw pad** — 7 detuned sawtooth voices per note through a
+  slow-opening lowpass with subtle 0.35 Hz tremolo. Classic
+  progressive-house texture.
+- **Resonant saw lead** — detuned double-saw + sine sub through a
+  Q=3.2 lowpass whose cutoff blooms open on attack, with delayed
+  vibrato that ramps in over the first 40 % of held notes.
+- **Plucky arp** — single saw with Q=6 resonant lowpass sweeping
+  5500 → 700 Hz per note, plus a square octave below for bite.
+- **Sub bass** — sine one octave under the root + triangle on the
+  root, both lowpassed at 500 Hz.
+- **Kick** — sine with 180 → 45 Hz pitch-drop over 90 ms, plus a
+  3 ms bandpassed noise click for transient snap.
+- **Snare** — bandpassed noise burst + triangle pitch-body.
+- **Hi-hat** — short highpassed noise, 8th offbeats in build, 16ths
+  in the drop.
+
+Audio routing:
+
+```
+master (0.55 headroom)
+  ├── sfxBus (unity)        ── all UI SFX (hover/click/confirm/etc.)
+  └── musicBus (0→0.32 ramp)
+        ├── drumBus         ── kick · snare · hat   (no sidechain)
+        └── melodicBus      ── pad · lead · arp · sub (sidechain-pumped)
+```
+
+**Sidechain pump** — on every kick, the `melodicBus` gain snaps to
+0.38 over 40 ms and springs back to 1.0 over 280 ms. The drums stay
+at full level so you hear the classic EDM "breathing" feel where the
+pad/lead/arp duck behind each beat.
 
 A Web-Audio-clock scheduler looks 0.5 s ahead in 60 ms increments so
 timing stays locked regardless of browser throttling.
 
-### Ducking
+### UI SFX ducking
 
-Every UI SFX briefly attenuates the music bus (`duckMusic(depth,
-duration)`) so the SFX punches through the pad without needing to be
-loud.
+`sound.duckMusic(depth, duration)` briefly dips the music bus when a
+UI SFX fires, so the SFX punches through. Early-returns when
+`musicSuppressed > 0` (i.e. on a game page) — if the music is
+supposed to be silent, there's nothing to duck, and ducking would
+otherwise re-write the suppression's gain schedule and unmute the
+music.
 
 ### Autoplay policy and mute
 
-Browsers (per the HTML5 autoplay spec) won't start audio without a user
-gesture — specifically: `click`, `keydown`, `pointerdown`, `touchstart`.
-`mouseover` is **not** an accepted gesture. So hover SFX only become
-audible **after the first real gesture** on the page. `SoundBoot`
-attaches listeners for those gestures once, captures the first, and
-calls `sound.enable()`.
+Browsers (per the HTML5 autoplay spec) can't start audio without a
+user gesture (`click`, `keydown`, `pointerdown`, `touchstart`). The
+portal's strategy minimizes the felt delay:
 
-The mute button in the top bar toggles `localStorage.brassey-audio-muted`.
-That preference persists across sessions.
+1. **Eager silent start on mount.** `SoundBoot` calls
+   `sound.enable({ silent: true })` the moment it mounts. This
+   succeeds immediately on SPA navigations (the AudioContext
+   survives across Next route changes) and on returning visitors
+   whose browser has granted site-level autoplay permission.
+2. **Self-healing gesture listeners.** The four gesture events
+   stay attached for the component's lifetime (not removed after
+   the first fire), so if the initial `resume()` attempt failed
+   silently the next interaction retries.
+3. **Visibility-change resume.** When the tab returns from
+   background (where browsers auto-suspend contexts), the engine
+   resumes immediately instead of waiting for a click.
+4. **Per-SFX `resumeIfNeeded()`**. Every hover/click/confirm/etc.
+   calls `ctx.resume()` if the context slipped back to
+   "suspended", so brief tab-background dips don't kill sound.
 
-Game pages use `sound.softMuteMusic()` — a transient bus fade-down that
-restores on unmount. It **does not** dispose audio nodes, so it's safe
-across fast navigation (an earlier version disposed nodes and racily
-nulled a freshly-recreated bus after a `setTimeout`; the current fade-
-only version avoids the problem entirely).
+The engine only sets `enabled = true` after confirming
+`ctx.state === "running"` — a suspended-but-resume-promise-resolved
+path doesn't count (scheduled events in that state never make sound).
+
+The mute button in the top bar toggles `localStorage["brassey:audio-muted"]`
+(colon separator). That preference persists across sessions.
+
+### Music suppression on game pages
+
+Game pages call `sound.softMuteMusic()` on mount and the returned
+release fn on unmount. This is **refcounted** — multiple overlapping
+suppressors compose correctly, and the flag is honored across
+`startMusic()` calls. That matters because on a cold page-load the
+music hasn't started yet when `softMuteMusic` is called; the
+refcount survives until `startMusic` eventually runs, at which point
+it sees the suppression and keeps the fresh bus at 0 gain. Without
+this, navigating to a game before any gesture then clicking inside
+the iframe would unmute music over gameplay.
 
 ### UI SFX delegation
 
-`bindDelegatedUiSounds` attaches three global listeners (`pointerover`,
-`mousedown`, `keydown`, `focusin`) with a broad selector covering every
-interactive element. The engine itself rate-limits hover to 12 Hz so
-scanning across the UI doesn't machine-gun.
+`bindDelegatedUiSounds` attaches four global listeners (`pointerover`,
+`mousedown`, `focusin`, `keydown`) with a broad selector covering
+links, buttons, form controls, `[role]`-tagged elements, and
+`[data-sfx]`/`.link-term`. The hover rate-limit is ~55 ms (~18 Hz)
+so scanning across a dense UI stays snappy without machine-gunning.
+
+### Per-user chat chimes + achievement fanfare
+
+`sound.notifyAs(handle)` picks a pitch from the D-dorian two-octave
+window via an FNV-1a hash of the handle, so each operator has a
+recognizable tone. `sound.achievement()` fires a D-major arpeggio
+(587 → 740 → 880 → 1175 Hz) with a glittery high-bell tail on every
+fresh unlock, briefly ducking the music so the fanfare sits on top.
 
 ---
 
@@ -837,6 +945,11 @@ Append one entry to the `GAMES` array in `src/lib/games.ts`:
   repo: "owner/repo",        // GitHub owner/repo of the LÖVE source
   ref: "main",               // optional, defaults to "main"
   subdir: ".",               // optional, path to main.lua within repo
+  identity: "your_game",     // optional — defaults to slug with dashes
+                             //   → underscores. Must match conf.lua
+                             //   `t.identity` or portal can't place
+                             //   __loveweb__/achievements.json where
+                             //   love.filesystem can read it.
 
   accentColor: "#8a4fff",
   multiplayer: "single",     // single | coop | mmo
@@ -958,9 +1071,12 @@ boot clean. Use this before every deploy when adding a new game.
 2. **Storage → Create Database → Neon Postgres** (free tier: 0.5 GB).
    Vercel auto-injects `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`,
    `POSTGRES_USER`, `POSTGRES_HOST`, `POSTGRES_PASSWORD`, `POSTGRES_DATABASE`.
-3. **Storage → Create Database → Upstash for Redis** (free tier: 10k
-   commands/day). Auto-injects `KV_REST_API_URL`, `KV_REST_API_TOKEN`,
-   `KV_REST_API_READ_ONLY_TOKEN`, `KV_URL`.
+3. **Storage → Create Database → Upstash for Redis** (free tier:
+   500 000 commands/day; the chat stream route runs an adaptive-
+   backoff poll + `MGET` batching so idle sessions cost under
+   ~10k/day/client, and a Postgres fallback kicks in automatically
+   if the cap is ever hit). Auto-injects `KV_REST_API_URL`,
+   `KV_REST_API_TOKEN`, `KV_REST_API_READ_ONLY_TOKEN`, `KV_URL`.
 4. **Environment Variables** (Production scope):
    - `AUTH_SECRET` — `openssl rand -base64 32`
    - `AUTH_GITHUB_ID` — GitHub OAuth App client ID
@@ -1103,8 +1219,13 @@ games/
 │
 └── src/
     ├── app/                           Next.js 15 App Router
-    │   ├── layout.tsx                 root — mounts BackgroundFX, SoundBoot, RouteSfx
-    │   ├── globals.css                CRT theme, scrollbars, panel chrome
+    │   ├── layout.tsx                 root — mounts BackgroundFX, SoundBoot, RouteSfx,
+    │   │                              UiEffects; wraps children in #ui-shake (the
+    │   │                              transform root consumed by shake/zoom FX)
+    │   ├── globals.css                CRT theme · scrollbars · panel chrome · achievement
+    │   │                              tiles · Steam-style toast · rank medallions ·
+    │   │                              game-frame backlight · cursor spotlight ·
+    │   │                              chat-msg entry flash · all UI-FX overlay layers
     │   ├── page.tsx                   / — library home (BootSplash, grid, chat)
     │   ├── signin/page.tsx            /signin — GitHub auth gate
     │   ├── stats/page.tsx             /stats — own telemetry (auth-gated)
@@ -1127,18 +1248,27 @@ games/
     │   ├── TopBar.tsx                 header — logo, nav, uplink pulse, mute, avatar
     │   ├── HeroBanner.tsx             landing hero on /
     │   ├── GameGrid.tsx               catalog grid of GameCards
-    │   ├── GameCard.tsx               single game tile with corner brackets
-    │   ├── GameRunner.tsx             iframe + postMessage bridge + heartbeat + achievements
+    │   ├── GameCard.tsx               single game tile with corner brackets +
+    │   │                              cursor-tracking spotlight
+    │   ├── GameRunner.tsx             iframe + postMessage bridge + heartbeat +
+    │   │                              achievements + quit overlay + exit button
     │   ├── AchievementsPanel.tsx      per-game achievement grid (stats + profiles)
-    │   ├── ChatDrawer.tsx             semi-transparent right drawer w/ SSE client
+    │   ├── AchievementToast.tsx       Steam-style live unlock toast (queue + entry
+    │   │                              glint + breathing rim + auto-dismiss)
+    │   ├── UiEffects.tsx              game→portal FX overlay (flash/shake/mood/
+    │   │                              ripple/shatter/calm/pulsate/chroma/…)
+    │   │                              subscribes to loveweb:fx postMessages
+    │   ├── ChatDrawer.tsx             translucent right drawer w/ SSE client,
+    │   │                              per-user chimes, fresh-msg flash, auth gate
     │   ├── Avatar.tsx                 rounded-square, glowing, deterministic color
     │   ├── UserMenu.tsx               click-avatar dropdown (Sign out, etc.)
     │   ├── MuteButton.tsx             audio toggle, persists to localStorage
-    │   ├── SoundBoot.tsx              attaches delegated UI SFX listeners
+    │   ├── SoundBoot.tsx              eager silent-start + self-healing gesture
+    │   │                              listeners + visibilitychange resume
     │   ├── RouteSfx.tsx               plays transition SFX on route change
     │   ├── BackgroundFX.tsx           canvas particle field + data streaks
     │   ├── BootSplash.tsx             CRT boot sequence on first paint
-    │   ├── SystemFooter.tsx           footer manifest
+    │   ├── SystemFooter.tsx           landing footer (technical platform facts)
     │   └── stats/
     │       └── StatsCharts.tsx        ActivityChart + PerGameChart (pure SVG)
     │
@@ -1146,9 +1276,12 @@ games/
     │   ├── auth.ts                    Auth.js v5 config + GitHub profile sync
     │   ├── db.ts                      pg connection pool + q() helper
     │   ├── kv.ts                      @vercel/kv client + channel constants
-    │   ├── games.ts                   GAMES registry ◀ add games here
+    │   ├── games.ts                   GAMES registry ◀ add games here. Includes
+    │   │                              `identity` per game for save-dir placement.
     │   ├── achievements.ts            catalog loader + validator (reads achievements.json)
-    │   └── sound.ts                   Web Audio engine — SFX + music + ducking
+    │   └── sound.ts                   Web Audio engine — UI SFX palette + procedural
+    │                                  EDM composer + sfxBus/drumBus/melodicBus routing
+    │                                  + sidechain pump + per-user notify chimes
     │
     └── types/                         (reserved for ambient type declarations)
 ```
