@@ -143,9 +143,16 @@ export async function GET(req: Request) {
         try { controller.enqueue(encoder.encode(`: ping ${Date.now()}\n\n`)); } catch {}
       }, 15000);
 
+      // KV path: 1.5s when active (1 mget/poll is dirt cheap), idle-backs
+      // off to 10s. DB-fallback path: 1.2s when active (a single indexed
+      // SELECT is also cheap; Neon's free tier handles this fine) — the
+      // chat needs to feel instant for users whether or not KV is rate-
+      // limited. Idle backoff caps at 8s for DB so dormant sessions still
+      // don't hammer the DB.
       const POLL_MIN = 1500;
       const POLL_MAX = 10000;
-      const POLL_DB  = 3000;
+      const POLL_DB  = 1200;
+      const POLL_DB_MAX = 8000;
       const BACKOFF_STEP = 1.4;
       let interval = POLL_MIN;
 
@@ -211,8 +218,14 @@ export async function GET(req: Request) {
         }
 
         // Adapt cadence: active chat stays snappy, idle chat backs off.
-        if (deliveredAny) interval = kvHealthy ? POLL_MIN : POLL_DB;
-        else interval = Math.min(interval * BACKOFF_STEP, POLL_MAX);
+        // DB path uses its own tighter ceiling since a cache miss costs
+        // a lot less than a KV command.
+        if (deliveredAny) {
+          interval = kvHealthy ? POLL_MIN : POLL_DB;
+        } else {
+          const ceil = kvHealthy ? POLL_MAX : POLL_DB_MAX;
+          interval = Math.min(interval * BACKOFF_STEP, ceil);
+        }
 
         await new Promise((r) => setTimeout(r, interval));
       }

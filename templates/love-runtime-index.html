@@ -193,11 +193,34 @@
     // NB: must be `var` (not `const`/`let`) — love.js's generated game.js
     // re-declares `Module` with a `var` and merges into this one. Using
     // `const` here breaks that merge with a SyntaxError.
+    // Emit once — Module.quit / onExit / onAbort can all race to fire
+    // during a clean love.event.quit() teardown. The parent only needs
+    // the first signal to start its exit flow.
+    var quitSignalled = false;
+    function signalQuit(status, reason) {
+      if (quitSignalled) return;
+      quitSignalled = true;
+      try {
+        parent.postMessage({
+          type: "loveweb:quit",
+          status: status == null ? 0 : status,
+          reason: reason || null,
+        }, "*");
+      } catch (e) {}
+    }
+
     var Module = {
       arguments: ["./game.love"],
       INITIAL_MEMORY: 33554432,
       printErr: (t) => { if (!handleMagicLine(t)) log("error", t); },
       print:    (t) => { if (!handleMagicLine(t)) log("info", t); },
+      // Emscripten's runtime exit hooks. love.event.quit() in Lua breaks
+      // the main loop; love.js then calls emscripten_force_exit which
+      // invokes Module.quit and Module.onExit. We register for both
+      // because the exact path depends on love.js version, and add
+      // onAbort for hard-crash paths so the parent can still recover.
+      onExit:  function (code) { signalQuit(code, null); },
+      onAbort: function (what) { signalQuit(1, String(what || "abort")); },
       canvas: (function(){
         const c = document.getElementById("canvas");
         c.addEventListener("webglcontextlost", (e) => { log("error", "webgl lost"); e.preventDefault(); }, false);
@@ -289,6 +312,20 @@
         },
       ],
       postRun: [
+        function installQuitHook() {
+          // love.js/emscripten 11 assigns Module.quit during runtime init;
+          // by postRun time it exists and we can wrap it. This catches the
+          // love.event.quit() path — the Lua-side clean-exit signal —
+          // which emscripten routes through Module.quit once love.run
+          // returns.
+          var origQuit = Module.quit;
+          Module.quit = function (status, toThrow) {
+            signalQuit(status, null);
+            if (typeof origQuit === "function") {
+              try { return origQuit.call(Module, status, toThrow); } catch (e) {}
+            }
+          };
+        },
         function startSyncLoop() {
           parent.postMessage({ type: "loveweb:ready", game: SLUG }, "*");
 
