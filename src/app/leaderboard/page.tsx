@@ -39,13 +39,17 @@ function fmtDate(iso: string | null): string {
   return new Date(iso).toLocaleDateString();
 }
 
-// Medal accent per top-3 rank. 1st gold, 2nd silver, 3rd bronze; everyone
-// else gets the generic purple rank number.
-function rankMeta(rank: number): { color: string; glyph: string } {
-  if (rank === 1) return { color: "#ffd54a", glyph: "①" };
-  if (rank === 2) return { color: "#c8d0e0", glyph: "②" };
-  if (rank === 3) return { color: "#ff8c5a", glyph: "③" };
-  return { color: "#6b5f82", glyph: String(rank).padStart(2, "0") };
+// Rank tier drives the medallion treatment:
+//   • Podium (1–3): large numeral, breathing glow in medal color.
+//   • High (4–10):  medium numeral, subtle purple glow.
+//   • Low  (11+):   small subdued numeral.
+// The shimmer pass is CSS-driven (see .rank-cell::before in globals.css).
+function rankTier(rank: number): { color: string; kind: "podium" | "high" | "low" } {
+  if (rank === 1) return { color: "#ffd54a", kind: "podium" };   // gold
+  if (rank === 2) return { color: "#d8dce6", kind: "podium" };   // silver
+  if (rank === 3) return { color: "#ff8c5a", kind: "podium" };   // bronze
+  if (rank <= 10) return { color: "#8a4fff", kind: "high" };     // purple
+  return { color: "#6b5f82", kind: "low" };                      // subdued
 }
 
 export default async function LeaderboardPage() {
@@ -81,7 +85,7 @@ export default async function LeaderboardPage() {
           ) : (
             <div className="panel overflow-hidden">
               {/* header row */}
-              <div className="grid grid-cols-[44px_1fr_92px_68px_60px_60px_88px_68px_92px] items-center gap-3 px-4 py-2 border-b border-eldritch-deep/60 bg-void-1/60 text-[0.6rem] uppercase tracking-[0.25em] text-bone/45">
+              <div className="grid grid-cols-[68px_1fr_92px_68px_60px_60px_88px_68px_92px] items-center gap-3 px-4 py-2 border-b border-eldritch-deep/60 bg-void-1/60 text-[0.6rem] uppercase tracking-[0.25em] text-bone/45">
                 <span>rank</span>
                 <span>operator</span>
                 <span className="text-right">playtime</span>
@@ -94,20 +98,28 @@ export default async function LeaderboardPage() {
               </div>
 
               {board.map((r, i) => {
-                const meta = rankMeta(r.rank);
+                const tier = rankTier(r.rank);
                 const isMe = meHandle && r.handle === meHandle;
+                const rankClass =
+                  tier.kind === "podium" ? "rank-podium"
+                  : tier.kind === "high"   ? "rank-high"
+                  :                          "rank-low";
                 return (
                   <div
                     key={r.userId}
-                    className={`grid grid-cols-[44px_1fr_92px_68px_60px_60px_88px_68px_92px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-eldritch-purple/5 ${
+                    className={`grid grid-cols-[68px_1fr_92px_68px_60px_60px_88px_68px_92px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-eldritch-purple/5 ${
                       i % 2 === 0 ? "bg-eldritch-deep/10" : ""
                     } ${isMe ? "ring-1 ring-inset ring-abyss-cyan/40" : ""}`}
                   >
                     <span
-                      className="font-mono font-semibold text-[0.8rem] tabular-nums"
-                      style={{ color: meta.color, textShadow: r.rank <= 3 ? `0 0 8px ${meta.color}` : "none" }}
+                      className={`rank-cell ${rankClass}`}
+                      style={
+                        tier.kind === "podium"
+                          ? ({ "--rank-color": tier.color, color: tier.color } as React.CSSProperties)
+                          : ({ "--rank-color": tier.color } as React.CSSProperties)
+                      }
                     >
-                      {meta.glyph}
+                      {r.rank}
                     </span>
                     <Link href={`/u/${encodeURIComponent(r.handle)}`} className="flex items-center gap-2.5 min-w-0 group">
                       <Avatar src={r.avatarUrl} handle={r.handle} size={30} radius={7} />

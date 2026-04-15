@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { sound } from "@/lib/sound";
 import { getGame } from "@/lib/games";
 import AchievementToast, { type ToastItem } from "./AchievementToast";
@@ -13,7 +15,8 @@ type IncomingMsg =
   | { type: "loveweb:save:read"; path: string; reqId: string }
   | { type: "loveweb:save:list"; reqId: string }
   | { type: "loveweb:log"; level: string; msg: string }
-  | { type: "loveweb:achievement:unlock"; key: string; meta?: Record<string, unknown> | null };
+  | { type: "loveweb:achievement:unlock"; key: string; meta?: Record<string, unknown> | null }
+  | { type: "loveweb:quit"; status?: number; reason?: string | null };
 
 type UnlockEntry = { key: string; unlockedAt: string; points: number };
 
@@ -35,11 +38,55 @@ export default function GameRunner({
   const [webglOk, setWebglOk] = useState<boolean | null>(null);
   const [booted, setBooted] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [exited, setExited] = useState<{ reason?: string | null; status?: number } | null>(null);
+  const router = useRouter();
   const accent = getGame(slug)?.accentColor ?? "#8a4fff";
 
   const dismissToast = useCallback((id: string) => {
     setToasts((cur) => cur.filter((t) => t.id !== id));
   }, []);
+
+  // Dev/verification hook: append `?_test_toast=1` to any game URL to fire
+  // a synthetic achievement toast a couple seconds after boot. Lets us
+  // exercise the full visual + sound pipeline without needing the game
+  // to publish a real achievement. Rarity and glyph can be overridden
+  // via ?_test_toast=legendary (etc).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const rarityParam = params.get("_test_toast");
+    if (!rarityParam) return;
+    const rarity = (["common", "uncommon", "rare", "legendary"] as const).includes(
+      rarityParam as "common" | "uncommon" | "rare" | "legendary"
+    )
+      ? (rarityParam as "common" | "uncommon" | "rare" | "legendary")
+      : "rare";
+    const t = setTimeout(() => {
+      setToasts((cur) => [
+        ...cur,
+        {
+          id: `demo:${Date.now()}`,
+          game: slug,
+          fresh: true,
+          points: rarity === "legendary" ? 100 : rarity === "rare" ? 50 : rarity === "uncommon" ? 25 : 10,
+          def: {
+            key: "demo_achievement",
+            title: rarity === "legendary" ? "Voidwalker" : "Test Transmission",
+            description:
+              rarity === "legendary"
+                ? "You breached the outer veil. The deep ones noticed."
+                : "Portal notification pipeline verified — end-to-end.",
+            glyph: rarity === "legendary" ? "✦" : rarity === "rare" ? "☽" : rarity === "uncommon" ? "✧" : "·",
+            points: rarity === "legendary" ? 100 : rarity === "rare" ? 50 : rarity === "uncommon" ? 25 : 10,
+            hidden: false,
+            rarity,
+          },
+        },
+      ]);
+      try { sound.achievement(); } catch { /* no-op pre-gesture */ }
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [slug]);
 
   // Detect WebGL up front. Brave's "Fingerprinting: Strict" shield disables
   // WebGL entirely — LÖVE errors out with "unable to create opengl window".
@@ -250,6 +297,16 @@ export default function GameRunner({
         } else if (data.type === "loveweb:log") {
           // eslint-disable-next-line no-console
           console.log(`[${slug}] ${data.level}:`, data.msg);
+        } else if (data.type === "loveweb:quit") {
+          // The game emitted a clean exit signal (love.event.quit, or an
+          // onExit/onAbort from the emscripten runtime). Show a short
+          // overlay on the canvas, play a confirm ping, then route back
+          // to the library — respecting our history trap (router.push,
+          // not window.history.back).
+          if (exited) return;
+          setExited({ reason: data.reason ?? null, status: data.status });
+          try { sound.confirm(); } catch {}
+          setTimeout(() => { router.push("/"); }, 1400);
         } else if (data.type === "loveweb:achievement:unlock") {
           if (!signedIn) return;
           const r = await fetch(`/api/achievements/unlock`, {
@@ -380,8 +437,13 @@ pnpm build:claude-mythos
     <div className="flex flex-col items-center">
       <div
         ref={wrapRef}
-        className="relative border border-eldritch-deep/60 bg-black overflow-hidden"
-        style={frameStyle}
+        className="game-frame relative border border-eldritch-deep/60 bg-black overflow-hidden"
+        style={
+          {
+            ...frameStyle,
+            "--game-accent": accent,
+          } as React.CSSProperties
+        }
       >
         <iframe
           ref={iframeRef}
@@ -408,13 +470,59 @@ pnpm build:claude-mythos
             </div>
           </div>
         )}
+        {/* Floating exit handle. Sits above the iframe at top-right, low
+            opacity until hovered so it doesn't distract during play.
+            Always pointer-events-auto — the whole point is that it
+            remains clickable even if the game has locked up, so the
+            player is never stranded. */}
+        <Link
+          href="/"
+          data-sfx="confirm"
+          title="exit to library"
+          className="absolute top-2 right-2 z-20 inline-flex items-center gap-1.5 px-2 py-1 text-[0.58rem] uppercase tracking-[0.22em] font-mono text-bone/55 bg-void-0/70 border border-eldritch-deep/60 hover:text-abyss-cyan hover:border-abyss-cyan/70 hover:bg-void-0/90 hover:shadow-[0_0_10px_#66e0ff55] transition-colors"
+        >
+          <span aria-hidden="true">↩</span>
+          <span>exit</span>
+        </Link>
+        {/* Clean-exit overlay — shown when the game signaled love.event.quit
+            (or onExit/onAbort). Auto-routes to /; the text here is just a
+            friendly hand-off. */}
+        {exited && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-void-0/92 backdrop-blur-sm">
+            <div
+              className="stamp mb-2"
+              style={{ color: accent, textShadow: `0 0 10px ${accent}aa` }}
+            >
+              session :: ended
+            </div>
+            <div className="text-lg uppercase tracking-[0.28em] text-bone/85">
+              game exited cleanly
+            </div>
+            <div className="mt-3 text-[0.65rem] uppercase tracking-[0.28em] text-bone/45">
+              returning to library<span className="caret" />
+            </div>
+          </div>
+        )}
       </div>
-      <div className="mt-3 w-full flex items-center text-[0.65rem] uppercase tracking-[0.25em] text-bone/50">
+      <div className="mt-3 w-full flex items-center justify-between text-[0.65rem] uppercase tracking-[0.25em] text-bone/50">
         <div className="flex items-center gap-3">
           <span className={`inline-block h-1.5 w-1.5 rounded-full ${booted ? "bg-matrix-green shadow-[0_0_8px_#33ff66]" : "bg-amber-signal"}`} />
           {booted ? "runtime ready" : "loading…"}
           {!signedIn && <span className="text-amber-signal ml-3">· not signed in — saves disabled</span>}
         </div>
+        {/* Reliable exit path. Lives OUTSIDE the iframe so it still works
+            even if the Lua runtime has frozen itself with love.event.quit()
+            or a hard lockup. Uses Next <Link> (not window.history.back —
+            our popstate trap would re-push the guard state). */}
+        <Link
+          href="/"
+          className="btn cyan !py-1 !px-2.5 !text-[0.62rem]"
+          data-sfx="confirm"
+          title="exit game — return to the library"
+        >
+          <span>↩</span>
+          <span>exit game</span>
+        </Link>
       </div>
       {/* Live achievement notifications — render at portal root (position:
           fixed) so they overlay the iframe even when the canvas is in

@@ -114,10 +114,24 @@ export default function ChatDrawer({
         const m = JSON.parse((evt as MessageEvent).data) as Msg;
         setMessages((prev) => {
           if (prev.some((p) => p.id === m.id)) return prev;
-          // Ping on every fresh live message — own and others. Backfilled
-          // history on (re)connect is older than ~5s and stays silent.
+          // Fresh-live message: play a per-user chime (pitch varies by
+          // handle so each operator has an identifiable tone), trigger a
+          // short haptic on mobile, and ignore sound for backfill batches
+          // whose messages are already >5s stale.
           const age = Date.now() - m.ts;
-          if (age < 5000) sound.notify();
+          if (age < 5000) {
+            const isMine = meHandle && m.handle === meHandle;
+            if (!isMine) {
+              try { sound.notifyAs(m.handle); } catch {}
+              try {
+                // navigator.vibrate is a no-op on desktop; on mobile it
+                // gives a short palpable tap. Short enough to not be
+                // annoying — a "look here" signal, not an alert.
+                (navigator as Navigator & { vibrate?: (p: number | number[]) => boolean })
+                  .vibrate?.([40, 30, 60]);
+              } catch {}
+            }
+          }
           return [...prev, m]
             .sort((a, b) => a.ts - b.ts)
             .slice(-200);
@@ -226,18 +240,36 @@ export default function ChatDrawer({
           </div>
 
           <div ref={listRef} className="flex-1 overflow-y-auto py-1 text-sm scrollbar-slim">
-            {!signedIn && (
-              <p className="text-bone/60 text-xs px-3 py-3">Authenticate to join the uplink.</p>
+            {!signedIn ? (
+              // Channel traffic is gated behind auth, both server-side (the
+              // /api/chat/stream route 401s without a session cookie) and
+              // client-side here — unauthenticated visitors see only a
+              // locked-feed prompt, never any message body or handle.
+              // Double belt: if for any reason `messages` ever contained
+              // rows while signedIn was false (e.g. session expired mid-
+              // session), we wouldn't render them.
+              <div className="flex flex-col items-center justify-center h-full p-6 text-center gap-3">
+                <div className="stamp text-eldritch-purple">uplink :: sealed</div>
+                <p className="text-bone/55 text-xs leading-relaxed">
+                  Channel traffic is visible only to authenticated operators.
+                </p>
+                <a href="/signin" className="btn cyan mt-1 text-[0.65rem]">
+                  ▸ Authenticate
+                </a>
+              </div>
+            ) : (
+              <>
+                {visible.length === 0 && (
+                  <p className="text-bone/50 text-xs px-3 py-3">
+                    <span className="text-eldritch-purple">» </span>
+                    the channel is quiet. say hello.
+                  </p>
+                )}
+                {visible.map((m, i) => (
+                  <Line key={m.id} m={m} isMe={m.handle === meHandle} zebra={i % 2 === 0} />
+                ))}
+              </>
             )}
-            {signedIn && visible.length === 0 && (
-              <p className="text-bone/50 text-xs px-3 py-3">
-                <span className="text-eldritch-purple">» </span>
-                the channel is quiet. say hello.
-              </p>
-            )}
-            {visible.map((m, i) => (
-              <Line key={m.id} m={m} isMe={m.handle === meHandle} zebra={i % 2 === 0} />
-            ))}
           </div>
 
           <div className="border-t border-eldritch-deep/60 p-3">
@@ -284,11 +316,19 @@ function Line({ m, isMe, zebra }: { m: Msg; isMe: boolean; zebra: boolean }) {
   const ss = t.getSeconds().toString().padStart(2, "0");
   const userColor = colorFor(m.handle);
   const profileHref = `/u/${encodeURIComponent(m.handle)}`;
+  // "fresh" flash: only render the marker if this message arrived within
+  // the last 3s on first render. The CSS animation (see globals.css
+  // `.chat-msg[data-fresh="true"]`) runs once on DOM insert. Removing the
+  // marker later wouldn't retrigger anything — React won't unmount the
+  // row — so we don't need to flip it back to false.
+  const isFresh = Date.now() - m.ts < 3000;
   return (
     <div
-      className={`group relative flex items-start gap-2.5 px-3 py-1.5 font-mono text-[0.85rem] leading-snug transition-colors hover:bg-eldritch-purple/5 ${
+      className={`chat-msg group relative flex items-start gap-2.5 px-3 py-1.5 font-mono text-[0.85rem] leading-snug transition-colors hover:bg-eldritch-purple/5 ${
         zebra ? "bg-eldritch-deep/10" : "bg-transparent"
       }`}
+      data-fresh={isFresh ? "true" : "false"}
+      data-mine={isMe ? "true" : "false"}
     >
       <Link href={profileHref} aria-label={`View ${m.handle}'s profile`} className="mt-0.5 shrink-0">
         <Avatar src={m.avatar} handle={m.handle} size={30} radius={7} />

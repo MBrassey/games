@@ -93,6 +93,30 @@ class SoundEngine {
   private enabled = false;
   private lastHover = 0;
 
+  // Refcounted music suppression. softMuteMusic() (called from the game
+  // page) bumps this; its returned release fn decrements. Any count > 0
+  // keeps the music bus silent even if the engine is (re)enabled or a
+  // new bus is created while suppressed. This fixes the "navigate to a
+  // game, then click inside the iframe, then the music starts playing
+  // over the game" bug where startMusic() ran after softMuteMusic() had
+  // returned a no-op cleanup because musicBus was still null at mount.
+  private musicSuppressed = 0;
+  private readonly MUSIC_TARGET = 0.32;
+
+  // Defensive: some browsers (Safari on iOS, Chrome when a tab goes to
+  // background for long) transition the AudioContext back to "suspended"
+  // after it was already running. Every sfx method calls resumeIfNeeded()
+  // so a resume is attempted on the very next user-driven sound —
+  // otherwise the engine looks `enabled: true` but silently produces no
+  // audio until the user toggles mute.
+  private resumeIfNeeded(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => { /* next gesture will try again */ });
+    }
+  }
+
   private ensure(): Ctx | null {
     if (typeof window === "undefined") return null;
     if (this.ctx) return this.ctx;
@@ -296,10 +320,13 @@ class SoundEngine {
     bus.connect(this.master);
     this.musicBus = bus;
 
-    // Fade-in over 6s, target level low enough that UI SFX sit on top
-    // without competing. Overall music is background atmosphere, not
-    // soundtrack.
-    bus.gain.linearRampToValueAtTime(0.32, ctx.currentTime + 6);
+    // Fade-in over 6s — UNLESS music is currently suppressed (e.g. the
+    // user is on a game page). In that case we keep the bus silent;
+    // the release fn returned by softMuteMusic will ramp it up when
+    // the user navigates away.
+    if (this.musicSuppressed === 0) {
+      bus.gain.linearRampToValueAtTime(this.MUSIC_TARGET, ctx.currentTime + 6);
+    }
 
     this.musicRunning = true;
     this.beatIndex = 0;
@@ -336,28 +363,35 @@ class SoundEngine {
     }
   }
 
-  // Temporarily mute the music without tearing down the engine. Returns
-  // an "un-duck" fn that restores the bus to its normal level. Use this
-  // for transient navigational mutes (like opening a game) rather than
-  // disable()/enable(), which dispose and recreate nodes and are race-y.
+  // Suppress music without tearing down the engine. Refcounted — multiple
+  // overlapping mutes (e.g. StrictMode double-effects, or two navigation
+  // guards) compose correctly. The returned release fn only restores
+  // music when the last suppressor lets go. Survives across startMusic()
+  // calls: if music hasn't started yet (engine not enabled), the flag is
+  // still honored when start eventually happens.
   softMuteMusic(): () => void {
+    this.musicSuppressed++;
     const ctx = this.ctx;
     const bus = this.musicBus;
-    if (!ctx || !bus) return () => {};
-    const t0 = ctx.currentTime;
-    bus.gain.cancelScheduledValues(t0);
-    bus.gain.setValueAtTime(bus.gain.value, t0);
-    bus.gain.linearRampToValueAtTime(0.0001, t0 + 0.4);
-    let restored = false;
+    if (ctx && bus) {
+      const t0 = ctx.currentTime;
+      bus.gain.cancelScheduledValues(t0);
+      bus.gain.setValueAtTime(bus.gain.value, t0);
+      bus.gain.linearRampToValueAtTime(0.0001, t0 + 0.4);
+    }
+    let released = false;
     return () => {
-      if (restored) return;
-      restored = true;
+      if (released) return;
+      released = true;
+      this.musicSuppressed = Math.max(0, this.musicSuppressed - 1);
+      if (this.musicSuppressed > 0) return;
+      const c = this.ctx;
       const b = this.musicBus;
-      if (!ctx || !b) return;
-      const t = ctx.currentTime;
+      if (!c || !b) return;
+      const t = c.currentTime;
       b.gain.cancelScheduledValues(t);
       b.gain.setValueAtTime(b.gain.value, t);
-      b.gain.linearRampToValueAtTime(0.32, t + 1.2);
+      b.gain.linearRampToValueAtTime(this.MUSIC_TARGET, t + 1.2);
     };
   }
 
@@ -601,6 +635,7 @@ class SoundEngine {
 
   /** Primary action click: snap + bandpassed square with a small drop. */
   click(): void {
+    this.resumeIfNeeded();
     if (!this.enabled) return;
     const ctx = this.ctx!;
     const t = ctx.currentTime;
@@ -619,6 +654,7 @@ class SoundEngine {
    *  Internally rate-limited to ~80 ms so moving across big elements
    *  doesn't machine-gun. */
   hover(): void {
+    this.resumeIfNeeded();
     if (!this.enabled) return;
     const ctx = this.ctx!;
     const now = ctx.currentTime;
@@ -642,6 +678,7 @@ class SoundEngine {
 
   /** Ascending two-note "affirmative". */
   confirm(): void {
+    this.resumeIfNeeded();
     if (!this.enabled) return;
     const ctx = this.ctx!;
     const t = ctx.currentTime;
@@ -661,6 +698,7 @@ class SoundEngine {
 
   /** Descending two-note deny. */
   deny(): void {
+    this.resumeIfNeeded();
     if (!this.enabled) return;
     const ctx = this.ctx!;
     const t = ctx.currentTime;
@@ -678,23 +716,56 @@ class SoundEngine {
     });
   }
 
-  /** Incoming chat / notification ping — bell-like. */
+  /** Incoming chat / notification ping — bell-like. Generic (no handle). */
   notify(): void {
+    this.notifyAs(null);
+  }
+
+  /** Per-user notify: deterministic pitch derived from the user's handle
+   *  so each operator has a recognizable chime. Stays in D dorian so it
+   *  always lands musically against the ambient soundtrack instead of
+   *  clashing with it.
+   *
+   *  Passing null (or an empty string) reproduces the original neutral
+   *  ping — useful for system notifications that aren't attributable to
+   *  a specific user (e.g. "you've been mentioned"). */
+  notifyAs(handle: string | null | undefined): void {
+    this.resumeIfNeeded();
     if (!this.enabled) return;
     const ctx = this.ctx!;
     const t = ctx.currentTime;
-    // FM-ish bell: carrier sine + modulator sine via detune.
+
+    // D dorian scale in the 4th/5th octave — bright but inside the
+    // key of the ambient music. 7 scale-degrees per octave, 2 octaves.
+    const SCALE = [
+      // Octave 5
+      587.33, 659.25, 698.46, 783.99, 880.0, 987.77, 1046.5,
+      // Octave 6
+      1174.66, 1318.51, 1396.91, 1567.98, 1760.0, 1975.53, 2093.0,
+    ];
+
+    let root = 1046.5; // C6 default
+    if (handle && handle.length > 0) {
+      // FNV-1a 32-bit hash of the handle for deterministic mapping.
+      let h = 2166136261;
+      for (let i = 0; i < handle.length; i++) {
+        h = Math.imul(h ^ handle.charCodeAt(i), 16777619);
+      }
+      root = SCALE[Math.abs(h) % SCALE.length];
+    }
+    const fifth = root * 1.5;
+
     this.playOsc({
-      freq: 1320, type: "sine",
+      freq: root, type: "sine",
       attack: 0.002, decay: 0.55, peak: 0.08,
       filter: { type: "lowpass", freq: 3500 },
       reverbSend: 0.6, startAt: t,
     });
     this.playOsc({
-      freq: 1980, type: "sine",
+      freq: fifth, type: "sine",
       attack: 0.002, decay: 0.35, peak: 0.05,
-      filter: { type: "lowpass", freq: 3000 },
-      reverbSend: 0.55, startAt: t,
+      filter: { type: "lowpass", freq: 3200 },
+      reverbSend: 0.55, startAt: t + 0.015,
       detune: 4,
     });
     this.playNoise({
@@ -706,6 +777,7 @@ class SoundEngine {
 
   /** Short filter sweep for state/route transitions. */
   transition(): void {
+    this.resumeIfNeeded();
     if (!this.enabled) return;
     const ctx = this.ctx!;
     const t = ctx.currentTime;
@@ -794,6 +866,7 @@ class SoundEngine {
 
   /** Per-keystroke micro-tick. Very quiet. */
   key(): void {
+    this.resumeIfNeeded();
     if (!this.enabled) return;
     const freq = 1200 + Math.random() * 260;
     this.playOsc({
