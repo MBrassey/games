@@ -465,11 +465,19 @@ class SoundEngine {
   // before it returns to full. Safe to call repeatedly — schedules on top
   // of the running gain.
   private duckMusic(depth: number, duration: number): void {
+    // Respect the music-suppression refcount. When the player is on a
+    // game page, softMuteMusic() bumps `musicSuppressed` and rams the
+    // bus down to silent. Ducking here would cancel those scheduled
+    // values and set gain back to MUSIC_TARGET — effectively unmuting
+    // the music every time a UI hover fired. Skip the duck entirely
+    // while suppression is active; the music is supposed to be silent,
+    // so there's nothing to duck.
+    if (this.musicSuppressed > 0) return;
     const ctx = this.ctx;
     const bus = this.musicBus;
     if (!ctx || !bus) return;
     const t = ctx.currentTime;
-    const target = 0.32; // must match startMusic's target bus gain
+    const target = this.MUSIC_TARGET;
     try {
       bus.gain.cancelScheduledValues(t);
       bus.gain.setValueAtTime(target, t);
