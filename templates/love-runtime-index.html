@@ -76,12 +76,19 @@
     // Achievement state snapshot delivered by the parent before the game
     // boots. Resolved during preRun and written into the save FS so the
     // game can read it with standard love.filesystem calls.
+    //
+    // IMPORTANT: the file has to land INSIDE the LÖVE identity dir
+    // (love.js puts the save dir at /home/web_user/love/<identity>/),
+    // otherwise love.filesystem.read("__loveweb__/achievements.json")
+    // resolves to a different path and the game sees nothing.
     var achievementsResolve;
     var achievementsPromise = new Promise(function (res) { achievementsResolve = res; });
+    var loveIdentity = null; // set by parent via loveweb:achievements:state
 
-    // Reserved path (under SAVE_ROOT) for portal ↔ game metadata that
-    // isn't part of the game's own save set. The save-watch loop skips
-    // this subtree so it doesn't round-trip to /api/saves.
+    // Reserved path (relative to the identity dir) for portal ↔ game
+    // metadata that isn't part of the game's own save set. The
+    // save-watch loop skips this subtree so it doesn't round-trip to
+    // /api/saves.
     var LOVEWEB_META_DIR = "__loveweb__";
 
     // Register the message listener BEFORE announcing our existence, so we
@@ -94,13 +101,15 @@
         const r = pendingReads.get(d.reqId); pendingReads.delete(d.reqId); r(d.dataB64);
       }
       if (d.type === "loveweb:achievements:state") {
+        if (d.identity) loveIdentity = d.identity;
         achievementsResolve(d.unlocks || []);
         // After boot, also refresh the on-disk snapshot so a game that
         // re-reads __loveweb__/achievements.json mid-play sees new unlocks.
+        // Write inside the identity dir so love.filesystem can read it.
         try {
           var FS = Module && Module.FS;
-          if (FS) {
-            var dir = SAVE_ROOT + "/" + LOVEWEB_META_DIR;
+          if (FS && loveIdentity) {
+            var dir = SAVE_ROOT + "/" + loveIdentity + "/" + LOVEWEB_META_DIR;
             try { FS.mkdirTree(dir); } catch (e) {}
             var payload = JSON.stringify({ version: 1, unlocks: d.unlocks || [] });
             FS.writeFile(dir + "/achievements.json", new TextEncoder().encode(payload));
@@ -273,11 +282,12 @@
       },
       preRun: [
         function preAchievements() {
-          // Inject the current achievement state at a stable path so the
-          // game can read it with `love.filesystem.read("__loveweb__/achievements.json")`.
-          // We wait up to 3s for the parent to push the state; absence is
-          // not fatal — the file just gets written empty and the game
-          // treats that as "nothing unlocked yet."
+          // Inject the current achievement state at a stable path inside
+          // the LÖVE identity dir so the game can read it with
+          // `love.filesystem.read("__loveweb__/achievements.json")`.
+          // We wait up to 3s for the parent to push the state + identity;
+          // absence is not fatal — we skip the write and the game treats
+          // a missing file as "nothing unlocked yet".
           Module.addRunDependency("loveweb-achievements");
           (async () => {
             try {
@@ -287,7 +297,14 @@
                 achievementsPromise,
                 new Promise((res) => setTimeout(function(){ res([]); }, 3000)),
               ]);
-              const dir = SAVE_ROOT + "/" + LOVEWEB_META_DIR;
+              if (!loveIdentity) {
+                log("warn", "achievement state: no identity provided by portal; skipping injection");
+                return;
+              }
+              // Pre-create the identity dir. love.js/physfs will reuse
+              // this dir when the game calls love.filesystem.write, so
+              // we're not racing LÖVE's init.
+              const dir = SAVE_ROOT + "/" + loveIdentity + "/" + LOVEWEB_META_DIR;
               try { FS.mkdirTree(dir); } catch {}
               const payload = JSON.stringify({
                 version: 1,
@@ -295,7 +312,7 @@
               });
               const bytes = new TextEncoder().encode(payload);
               FS.writeFile(dir + "/achievements.json", bytes);
-              log("info", "achievement state injected (" + unlocks.length + " unlock(s))");
+              log("info", "achievement state injected at " + dir + " (" + unlocks.length + " unlock(s))");
             } catch (e) { log("warn", "achievement state injection: " + e); }
             finally { Module.removeRunDependency("loveweb-achievements"); }
           })();
@@ -371,15 +388,18 @@
             }
           }
 
-          // Any change under /__loveweb__/ is portal-managed metadata and
-          // must not be synced back to /api/saves — otherwise the injected
-          // achievement state would round-trip into `game_saves`.
-          const metaPrefix = SAVE_ROOT + "/" + LOVEWEB_META_DIR + "/";
+          // Any path containing /__loveweb__/ is portal-managed metadata
+          // and must not be synced back to /api/saves — otherwise the
+          // injected achievement state would round-trip into game_saves.
+          // We match on the segment rather than a specific prefix so
+          // this holds regardless of identity dir placement (the meta
+          // file now lives at <SAVE_ROOT>/<identity>/__loveweb__/...).
+          const metaSegment = "/" + LOVEWEB_META_DIR + "/";
           setInterval(() => {
             try {
               try { FS.mkdirTree(SAVE_ROOT); } catch {}
               walk(SAVE_ROOT, (p, st) => {
-                if (p.indexOf(metaPrefix) === 0) return;
+                if (p.indexOf(metaSegment) >= 0) return;
                 const mt = +st.mtime;
                 const prev = mtimes.get(p);
                 if (prev === mt) return;
@@ -402,7 +422,7 @@
           window.addEventListener("beforeunload", () => {
             try {
               walk(SAVE_ROOT, (p) => {
-                if (p.indexOf(metaPrefix) === 0) return;
+                if (p.indexOf(metaSegment) >= 0) return;
                 const bytes = FS.readFile(p);
                 const rel = p.replace(SAVE_ROOT + "/", "");
                 parent.postMessage({
