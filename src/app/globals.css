@@ -671,7 +671,10 @@ body::after {
   color: #6b5f82;
 }
 
-/* Shimmer flash — runs once per cell on mount. */
+/* Continuous shimmer — each rank cell shines every 10 s, staggered
+   per-row so the whole leaderboard flickers like a slow neon sign
+   rather than pulsing in unison. Row index drives --shimmer-delay
+   (set inline by the leaderboard page). */
 .rank-cell::before {
   content: "";
   position: absolute;
@@ -679,17 +682,35 @@ body::after {
   pointer-events: none;
   background: linear-gradient(
     100deg,
-    transparent 30%,
-    color-mix(in srgb, var(--rank-color, #8a4fff) 60%, transparent) 50%,
-    transparent 70%
+    transparent 22%,
+    color-mix(in srgb, var(--rank-color, #8a4fff) 50%, transparent) 46%,
+    color-mix(in srgb, var(--rank-color, #8a4fff) 95%, transparent) 50%,
+    color-mix(in srgb, var(--rank-color, #8a4fff) 50%, transparent) 54%,
+    transparent 78%
   );
   mix-blend-mode: screen;
-  transform: translateX(-120%);
-  animation: rank-shimmer 1.6s cubic-bezier(0.4, 0, 0.2, 1) 0.2s 1 forwards;
+  transform: translateX(-140%);
+  opacity: 0;
+  animation: rank-shimmer 10s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  animation-delay: var(--shimmer-delay, 0s);
 }
+
+/* 10 s cycle: ~1.3 s of active sweep (0 → 13%), 8.7 s of idle. The
+   opacity ramps in/out at the edges so the shimmer fades in from off-
+   screen and fades out as it exits — no hard pop. Keyframes outside
+   the 0–13% range pin the pseudo off-screen at zero opacity. */
 @keyframes rank-shimmer {
-  to { transform: translateX(120%); }
+  0%   { transform: translateX(-140%); opacity: 0; }
+  2%   { opacity: 0.95; }
+  6.5% { transform: translateX(-10%); opacity: 1; }
+  11%  { opacity: 0.9; }
+  13%  { transform: translateX(140%); opacity: 0; }
+  100% { transform: translateX(140%); opacity: 0; }
 }
+
+/* Lower-tier rows (4-10, 11+) get their own --rank-color via the inline
+   style on the rank-cell — so they also benefit from the shimmer in
+   their tier hue, not just the podium. */
 @keyframes rank-podium-pulse {
   0%, 100% {
     transform: scale(1);
