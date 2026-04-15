@@ -243,6 +243,12 @@ class SoundEngine {
   private master: GainNode | null = null;
   private reverb: ConvolverNode | null = null;
   private musicBus: GainNode | null = null;
+  // UI SFX route through their own bus at unity gain so they sit
+  // clearly over the ambient soundtrack (which rides on a separate
+  // bus attenuated to ~0.32). Previously UI sounds connected straight
+  // to master, which made them quieter than the music they were
+  // supposed to punch through.
+  private sfxBus: GainNode | null = null;
   private musicRunning = false;
   private nextScheduleAt = 0; // next beat time (absolute, ctx.currentTime scale)
   private beatIndex = 0;
@@ -288,6 +294,15 @@ class SoundEngine {
     master.gain.value = 0.55; // global headroom
     master.connect(ctx.destination);
     this.master = master;
+
+    // Dedicated UI SFX bus at unity gain. Interface sounds need to sit
+    // clearly over the music; the music bus rides at ~0.32, so UI at
+    // master-only gain ~0.55 would be subjectively quieter. Parking UI
+    // on its own bus keeps the signal path simple and loud.
+    const sfxBus = ctx.createGain();
+    sfxBus.gain.value = 1.0;
+    sfxBus.connect(master);
+    this.sfxBus = sfxBus;
 
     // Tiny convolution reverb — 200 ms decaying noise IR. Glues everything
     // together without sounding like a church.
@@ -377,7 +392,12 @@ class SoundEngine {
     detune?: number;
   }): void {
     const ctx = this.ensure();
-    if (!ctx || !this.master) return;
+    // UI SFX route through the dedicated sfxBus so they cut clearly
+    // over the music bus. Music-specific voices (playPad/playBass/
+    // playVibes/playLead/playSparkle/playBrush) use this.musicBus
+    // directly and aren't affected by this routing change.
+    const out = this.sfxBus ?? this.master;
+    if (!ctx || !out) return;
     const t0 = params.startAt ?? ctx.currentTime;
     const dur = (params.attack ?? 0.004) + (params.decay ?? 0.1);
 
@@ -405,7 +425,7 @@ class SoundEngine {
       tail = f;
     }
     osc.connect(g);
-    tail.connect(this.master);
+    tail.connect(out);
     if (params.reverbSend && this.reverb) {
       const send = ctx.createGain();
       send.gain.value = params.reverbSend;
@@ -425,7 +445,8 @@ class SoundEngine {
     reverbSend?: number;
   }): void {
     const ctx = this.ensure();
-    if (!ctx || !this.master) return;
+    const out = this.sfxBus ?? this.master;
+    if (!ctx || !out) return;
     const t0 = params.startAt ?? ctx.currentTime;
     const sr = ctx.sampleRate;
     const len = Math.max(1, Math.floor(sr * params.duration));
@@ -448,7 +469,7 @@ class SoundEngine {
       tail = f;
     }
     src.connect(g);
-    tail.connect(this.master);
+    tail.connect(out);
     if (params.reverbSend && this.reverb) {
       const send = ctx.createGain();
       send.gain.value = params.reverbSend;
@@ -981,46 +1002,71 @@ class SoundEngine {
 
   // --- the palette ---
 
-  /** Primary action click: snap + bandpassed square with a small drop. */
+  /** Primary action click: plastic-snap noise + bandpassed square with a
+   *  small pitch drop. Routes through sfxBus at unity gain so the snap
+   *  reads clearly over the ambient bed. */
   click(): void {
     this.resumeIfNeeded();
     if (!this.enabled) return;
     const ctx = this.ctx!;
     const t = ctx.currentTime;
-    this.playNoise({ duration: 0.025, peak: 0.14, filter: { type: "highpass", freq: 1800, Q: 0.8 }, startAt: t });
+    this.playNoise({
+      duration: 0.028, peak: 0.24,
+      filter: { type: "highpass", freq: 1800, Q: 0.8 },
+      startAt: t,
+    });
     this.playOsc({
       freq: 880, freqEnd: 520, type: "square",
-      attack: 0.003, decay: 0.1, peak: 0.18,
+      attack: 0.003, decay: 0.1, peak: 0.3,
       filter: { type: "bandpass", freq: 1400, Q: 2.8 },
       reverbSend: 0.5, startAt: t,
+    });
+    // Bright high tick right at the onset — this is the "pop" of a
+    // physical terran-console button press.
+    this.playOsc({
+      freq: 3200, type: "sine",
+      attack: 0.001, decay: 0.04, peak: 0.12,
+      filter: { type: "highpass", freq: 2500 },
+      reverbSend: 0.3, startAt: t,
     });
     this.duckMusic(0.4, 0.22);
   }
 
-  /** Hover acknowledge — a short upward chirp + noise tick, plus a music
-   *  duck so it's audible through the pad without being loud.
-   *  Internally rate-limited to ~80 ms so moving across big elements
-   *  doesn't machine-gun. */
+  /** Hover acknowledge — short upward chirp + noise tick with a
+   *  terran-console "tink" on top. Routes through the dedicated sfxBus
+   *  at unity gain so it sits clearly over the music bed. Rate-limited
+   *  to ~55 ms so scanning across a dense UI stays snappy without
+   *  machine-gunning. */
   hover(): void {
     this.resumeIfNeeded();
     if (!this.enabled) return;
     const ctx = this.ctx!;
     const now = ctx.currentTime;
-    if (now - this.lastHover < 0.08) return;
+    if (now - this.lastHover < 0.055) return;
     this.lastHover = now;
-    // Upward chirp — 1400 → 2200 Hz over 80 ms. Triangle for cleaner tone.
+    // Upward chirp — 1400 → 2200 Hz over 80 ms. Square-ish tone for
+    // a brighter, more metallic read; triangle was reading soft.
     this.playOsc({
       freq: 1400, freqEnd: 2200, type: "triangle",
-      attack: 0.002, decay: 0.1, peak: 0.18,
+      attack: 0.002, decay: 0.1, peak: 0.32,
       filter: { type: "bandpass", freq: 2400, Q: 1.6 },
       reverbSend: 0.3,
     });
-    // Plus a short noise snap — gives it the "tick" of a real UI click.
+    // Stacked detuned voice one octave up for air/shimmer. Quiet and
+    // higher than the chirp's band so it reads as a "halo" over the tone.
+    this.playOsc({
+      freq: 2800, freqEnd: 4400, type: "sine",
+      attack: 0.002, decay: 0.08, peak: 0.14,
+      filter: { type: "highpass", freq: 2200 },
+      reverbSend: 0.45,
+    });
+    // Short noise snap — gives it the "tink" of a real UI click.
     this.playNoise({
-      duration: 0.02, peak: 0.09,
+      duration: 0.022, peak: 0.16,
       filter: { type: "highpass", freq: 3000 },
     });
-    // Duck the music for 180 ms so the SFX punches through.
+    // Duck the music for 180 ms so the SFX punches through — no-op
+    // on game pages where music is suppressed.
     this.duckMusic(0.55, 0.18);
   }
 
