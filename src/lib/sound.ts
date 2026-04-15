@@ -742,6 +742,56 @@ class SoundEngine {
     });
   }
 
+  /** Achievement-unlocked fanfare — rising arpeggio (I-iii-V-octave in
+   *  D) with a glittery high sparkle on top and a soft noise tail. Warmer
+   *  than the boot chime and punchier than confirm(), so an unlock feels
+   *  distinct from any other UI event. */
+  achievement(): void {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const t = ctx.currentTime + 0.02;
+    // D major triad → octave D (587→740→880→1175 Hz).
+    const arpeggio = [587.33, 739.99, 880.0, 1174.66];
+    arpeggio.forEach((f, i) => {
+      this.playOsc({
+        freq: f, type: "triangle",
+        attack: 0.004, decay: 0.28 + i * 0.04, peak: 0.085,
+        filter: { type: "lowpass", freq: 3000 },
+        reverbSend: 0.6, startAt: t + i * 0.08,
+      });
+      // A cleaner sine doubled an octave up gives the "shine".
+      this.playOsc({
+        freq: f * 2, type: "sine",
+        attack: 0.003, decay: 0.2 + i * 0.03, peak: 0.04,
+        filter: { type: "lowpass", freq: 5000 },
+        reverbSend: 0.55, startAt: t + i * 0.08,
+      });
+    });
+    // Glittery sparkle tail: two high bell tones detuned against each
+    // other.
+    this.playOsc({
+      freq: 2637, type: "sine",
+      attack: 0.002, decay: 0.6, peak: 0.055,
+      filter: { type: "highpass", freq: 1500 },
+      reverbSend: 0.7, startAt: t + arpeggio.length * 0.08,
+    });
+    this.playOsc({
+      freq: 3520, type: "sine",
+      attack: 0.002, decay: 0.5, peak: 0.04,
+      filter: { type: "highpass", freq: 2000 },
+      reverbSend: 0.7, startAt: t + arpeggio.length * 0.08 + 0.06,
+    });
+    // Tiny noise pop at the start for a "chime hit" transient.
+    this.playNoise({
+      duration: 0.06, peak: 0.035,
+      filter: { type: "highpass", freq: 3500 },
+      startAt: t,
+    });
+    // Light duck on the ambient music so the chime sits on top without
+    // competing — matches the UI pattern used elsewhere.
+    this.duckMusic(0.45, 0.9);
+  }
+
   /** Per-keystroke micro-tick. Very quiet. */
   key(): void {
     if (!this.enabled) return;

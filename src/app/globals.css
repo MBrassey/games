@@ -246,3 +246,310 @@ body::after {
     transparent 4px 8px
   );
 }
+
+/* ============================================================
+   Achievement tiles
+   ============================================================
+   Each tile sets `--ach-glow` inline to the rarity color
+   (common = game accent; uncommon/rare/legendary get a fixed
+   palette). All the CSS below consumes that variable so we get
+   cohesive per-tile theming with a single inline style.
+
+   color-mix() is supported in all evergreen browsers since
+   early 2023; no fallback needed for games.brassey.io's target. */
+
+.ach-tile {
+  position: relative;
+  overflow: hidden;
+  transition: transform 200ms ease, border-color 200ms ease;
+}
+
+.ach-tile-unlocked {
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--ach-glow) 14%, transparent) 0%,
+      color-mix(in srgb, var(--ach-glow) 4%, transparent)  45%,
+      rgba(7, 4, 20, 0.65) 100%
+    ),
+    rgba(7, 4, 20, 0.65);
+  border-color: color-mix(in srgb, var(--ach-glow) 55%, transparent);
+  animation: ach-breathe 4.5s ease-in-out infinite;
+}
+
+/* Diagonal shimmer streak sweeping across the tile. Runs on a long
+   interval so it reads as a "polish" highlight, not a strobe. */
+.ach-tile-unlocked::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -60%;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(
+    100deg,
+    transparent 15%,
+    color-mix(in srgb, var(--ach-glow) 38%, transparent) 45%,
+    color-mix(in srgb, var(--ach-glow) 55%, transparent) 52%,
+    color-mix(in srgb, var(--ach-glow) 38%, transparent) 58%,
+    transparent 85%
+  );
+  transform: skewX(-22deg);
+  mix-blend-mode: screen;
+  opacity: 0.55;
+  pointer-events: none;
+  animation: ach-shimmer 6.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Corner sparkle — a pulsing dot at top-right, reinforces "active". */
+.ach-tile-unlocked::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ach-glow);
+  box-shadow:
+    0 0 6px var(--ach-glow),
+    0 0 14px color-mix(in srgb, var(--ach-glow) 70%, transparent);
+  opacity: 0.85;
+  animation: ach-spark 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Legendary gets a hotter, wider shimmer with a white core — a proper
+   glint — plus a slower interval so it feels weightier. */
+.ach-tile-legendary::before {
+  width: 55%;
+  background: linear-gradient(
+    100deg,
+    transparent 10%,
+    color-mix(in srgb, var(--ach-glow) 30%, transparent) 35%,
+    color-mix(in srgb, var(--ach-glow) 70%, transparent) 48%,
+    #fff7d6 52%,
+    color-mix(in srgb, var(--ach-glow) 70%, transparent) 56%,
+    color-mix(in srgb, var(--ach-glow) 30%, transparent) 65%,
+    transparent 90%
+  );
+  opacity: 0.75;
+  animation-duration: 8s;
+}
+
+/* Icon cell, unlocked: radial well of color, stronger inner/outer glow
+   with its own slow pulse synced to feel "alive". */
+.ach-icon-unlocked {
+  color: var(--ach-glow);
+  background: radial-gradient(
+    circle at 50% 45%,
+    color-mix(in srgb, var(--ach-glow) 28%, transparent) 0%,
+    color-mix(in srgb, var(--ach-glow) 6%, transparent)  55%,
+    rgba(3, 2, 8, 0.95) 100%
+  );
+  border-color: color-mix(in srgb, var(--ach-glow) 70%, transparent);
+  text-shadow:
+    0 0 8px var(--ach-glow),
+    0 0 18px color-mix(in srgb, var(--ach-glow) 55%, transparent);
+  animation: ach-icon-glow 3.2s ease-in-out infinite;
+}
+
+@keyframes ach-breathe {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--ach-glow) 30%, transparent),
+      inset 0 0 16px color-mix(in srgb, var(--ach-glow) 8%,  transparent),
+      0 0 12px color-mix(in srgb, var(--ach-glow) 18%, transparent),
+      0 0 32px color-mix(in srgb, var(--ach-glow) 7%,  transparent);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--ach-glow) 55%, transparent),
+      inset 0 0 26px color-mix(in srgb, var(--ach-glow) 18%, transparent),
+      0 0 22px color-mix(in srgb, var(--ach-glow) 32%, transparent),
+      0 0 60px color-mix(in srgb, var(--ach-glow) 14%, transparent);
+  }
+}
+
+@keyframes ach-shimmer {
+  /* Dwell off-screen between passes so the sweep feels like a highlight,
+     not a strobe. The `left` values pair with width:45% to fully clear
+     the tile before/after the visible range. */
+  0%,  8%  { left: -60%; }
+  55%      { left: 130%; }
+  100%     { left: 130%; }
+}
+
+@keyframes ach-spark {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.35); }
+}
+
+@keyframes ach-icon-glow {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 8px  color-mix(in srgb, var(--ach-glow) 25%, transparent),
+      0 0 8px  color-mix(in srgb, var(--ach-glow) 38%, transparent),
+      0 0 16px color-mix(in srgb, var(--ach-glow) 16%, transparent);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 14px color-mix(in srgb, var(--ach-glow) 45%, transparent),
+      0 0 14px color-mix(in srgb, var(--ach-glow) 60%, transparent),
+      0 0 30px color-mix(in srgb, var(--ach-glow) 32%, transparent);
+  }
+}
+
+/* Respect the user's reduced-motion preference — keep the tile
+   obviously "on" (glow + gradient stay), drop the animated sweeps. */
+@media (prefers-reduced-motion: reduce) {
+  .ach-tile-unlocked,
+  .ach-icon-unlocked {
+    animation: none;
+  }
+  .ach-tile-unlocked::before,
+  .ach-tile-unlocked::after {
+    animation: none;
+  }
+}
+
+/* ============================================================
+   Achievement toast — Steam-style in-app unlock notification
+   ============================================================
+   Anchored by the React component to bottom-right of the viewport
+   (overlaying the game iframe). Slide/opacity transitions come from
+   Tailwind utilities on the wrapper; everything below is the
+   panel chrome + shine. */
+
+.ach-toast {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--ach-glow) 22%, transparent) 0%,
+      color-mix(in srgb, var(--ach-glow) 8%,  transparent) 40%,
+      rgba(7, 4, 20, 0.9) 100%
+    ),
+    rgba(7, 4, 20, 0.9);
+  border-color: color-mix(in srgb, var(--ach-glow) 65%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--ach-glow) 45%, transparent),
+    inset 0 0 22px  color-mix(in srgb, var(--ach-glow) 12%, transparent),
+    0 0 18px        color-mix(in srgb, var(--ach-glow) 35%, transparent),
+    0 0 56px        color-mix(in srgb, var(--ach-glow) 16%, transparent),
+    0 8px 28px      rgba(0, 0, 0, 0.55);
+  animation: ach-toast-breathe 3.2s ease-in-out infinite;
+  cursor: pointer;
+}
+
+.ach-toast::before {
+  /* Entry glint: a bright diagonal sweep that runs once after the
+     toast settles into view. Trigger via animation-delay so it
+     kicks off after the slide-in lands. */
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -60%;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(
+    100deg,
+    transparent 15%,
+    color-mix(in srgb, var(--ach-glow) 45%, transparent) 45%,
+    color-mix(in srgb, var(--ach-glow) 75%, transparent) 50%,
+    color-mix(in srgb, var(--ach-glow) 45%, transparent) 55%,
+    transparent 85%
+  );
+  transform: skewX(-22deg);
+  mix-blend-mode: screen;
+  opacity: 0.7;
+  pointer-events: none;
+  animation: ach-toast-glint 2.4s cubic-bezier(0.4, 0, 0.2, 1) 0.3s 1 forwards;
+}
+
+.ach-toast::after {
+  /* Persistent pulsing rim at the top — reads as "active/new". */
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--ach-glow) 50%,
+    transparent 100%
+  );
+  box-shadow: 0 0 14px var(--ach-glow);
+  animation: ach-toast-rim 2.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Legendary toast — gold highlight core, bigger, slower. */
+.ach-toast-legendary::before {
+  width: 60%;
+  background: linear-gradient(
+    100deg,
+    transparent 10%,
+    color-mix(in srgb, var(--ach-glow) 45%, transparent) 35%,
+    color-mix(in srgb, var(--ach-glow) 85%, transparent) 48%,
+    #fff7d6 52%,
+    color-mix(in srgb, var(--ach-glow) 85%, transparent) 56%,
+    color-mix(in srgb, var(--ach-glow) 45%, transparent) 65%,
+    transparent 90%
+  );
+  animation-duration: 3.2s;
+}
+
+.ach-toast-icon {
+  color: var(--ach-glow);
+  background: radial-gradient(
+    circle at 50% 45%,
+    color-mix(in srgb, var(--ach-glow) 32%, transparent) 0%,
+    color-mix(in srgb, var(--ach-glow) 8%,  transparent) 55%,
+    rgba(3, 2, 8, 0.95) 100%
+  );
+  border-color: color-mix(in srgb, var(--ach-glow) 75%, transparent);
+  text-shadow:
+    0 0 10px var(--ach-glow),
+    0 0 22px color-mix(in srgb, var(--ach-glow) 60%, transparent);
+  animation: ach-icon-glow 3s ease-in-out infinite;
+}
+
+@keyframes ach-toast-breathe {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--ach-glow) 40%, transparent),
+      inset 0 0 20px  color-mix(in srgb, var(--ach-glow) 10%, transparent),
+      0 0 14px        color-mix(in srgb, var(--ach-glow) 28%, transparent),
+      0 0 44px        color-mix(in srgb, var(--ach-glow) 12%, transparent),
+      0 8px 24px      rgba(0, 0, 0, 0.5);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--ach-glow) 65%, transparent),
+      inset 0 0 30px  color-mix(in srgb, var(--ach-glow) 22%, transparent),
+      0 0 24px        color-mix(in srgb, var(--ach-glow) 45%, transparent),
+      0 0 70px        color-mix(in srgb, var(--ach-glow) 22%, transparent),
+      0 8px 28px      rgba(0, 0, 0, 0.55);
+  }
+}
+
+@keyframes ach-toast-glint {
+  0%   { left: -60%; opacity: 0; }
+  5%   { opacity: 0.85; }
+  100% { left: 130%; opacity: 0; }
+}
+
+@keyframes ach-toast-rim {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ach-toast { animation: none; }
+  .ach-toast::before,
+  .ach-toast::after { animation: none; opacity: 0; }
+}

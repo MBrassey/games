@@ -1,7 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { sound } from "@/lib/sound";
+import { getGame } from "@/lib/games";
+import AchievementToast, { type ToastItem } from "./AchievementToast";
+import type { AchievementDef } from "@/lib/achievements";
 
 type IncomingMsg =
   | { type: "loveweb:hello"; game: string }
@@ -31,6 +34,12 @@ export default function GameRunner({
   const [runtimeAvailable, setRuntimeAvailable] = useState<boolean | null>(null);
   const [webglOk, setWebglOk] = useState<boolean | null>(null);
   const [booted, setBooted] = useState(false);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const accent = getGame(slug)?.accentColor ?? "#8a4fff";
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts((cur) => cur.filter((t) => t.id !== id));
+  }, []);
 
   // Detect WebGL up front. Brave's "Fingerprinting: Strict" shield disables
   // WebGL entirely — LÖVE errors out with "unable to create opengl window".
@@ -256,7 +265,26 @@ export default function GameRunner({
           const j = (await r.json()) as {
             fresh: boolean;
             unlock: { key: string; points: number };
+            definition: AchievementDef;
           };
+          // Surface a Steam-style toast only on the FIRST unlock for this
+          // user + achievement. Replays shouldn't spam — the game side can
+          // still safely call unlock idempotently.
+          if (j.fresh) {
+            setToasts((cur) => [
+              ...cur,
+              {
+                id: `${slug}:${j.unlock.key}:${Date.now()}`,
+                game: slug,
+                def: j.definition,
+                points: j.unlock.points,
+                fresh: true,
+              },
+            ]);
+            // Fanfare. Sound engine no-ops if audio isn't unlocked yet
+            // (user hasn't gestured), so this is safe unconditionally.
+            try { sound.achievement(); } catch { /* non-fatal */ }
+          }
           // Re-push the full state so the in-game meta file stays fresh
           // for UI hydration if the game re-reads it. Also emit an ack
           // for debugging/logs.
@@ -388,6 +416,10 @@ pnpm build:claude-mythos
           {!signedIn && <span className="text-amber-signal ml-3">· not signed in — saves disabled</span>}
         </div>
       </div>
+      {/* Live achievement notifications — render at portal root (position:
+          fixed) so they overlay the iframe even when the canvas is in
+          fullscreen. Stack 3-deep; older ones auto-dismiss. */}
+      <AchievementToast queue={toasts} accent={accent} onDismiss={dismissToast} />
     </div>
   );
 }

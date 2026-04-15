@@ -608,12 +608,33 @@ metadata never round-trips into `game_saves`.
   `AchievementsPanel` renders one card per game, listing every
   catalog entry with locked/unlocked state, date, points, and rarity.
   Hidden achievements display as `???` until earned.
+- **Unlocked tiles shine.** Earned achievements get a layered
+  box-shadow glow that breathes on a 4.5 s cycle, a diagonal shimmer
+  streak that sweeps across every 6.5 s, and a pulsing sparkle at the
+  top-right corner — all tinted by rarity (common = the game's
+  accent; uncommon = green; rare = cyan; legendary = gold). Legendary
+  unlocks add a brighter, gold-cored glint.
 - **Leaderboard** — the row adds an `achv · pts` column showing count
   and total points. Achievement points slot in as a tie-break signal
   ahead of sessions and messages, so completionists surface above
   pure idle time when playtime is tied.
 - **KPI row** — a new trophy tile on both stats and profile pages
   shows total unlocks and total points earned across every game.
+
+### Live in-game unlock toasts
+
+The moment a game emits `print("[[LOVEWEB_ACH]]unlock <key>")` the
+portal shows a **Steam-style toast** in the bottom-right of the viewport,
+overlaying the iframe. It mirrors the panel glow — rarity-colored radial
+icon background, entry shimmer glint (gold-cored for legendary), a
+breathing rim pulse, and a synthesized fanfare chord (D-major triad up
+to the octave, with a glittery high-bell tail) that slightly ducks the
+ambient soundtrack.
+
+Toasts auto-dismiss after ~5 s (click to dismiss early), stack up to 3,
+fire **only on fresh unlocks** (replays are silent no-ops), and honor
+`prefers-reduced-motion`. Implementation: `src/components/AchievementToast.tsx`
++ the `.ach-toast*` / `.ach-tile*` CSS in `src/app/globals.css`.
 
 ### Why not a DB-backed catalog?
 
