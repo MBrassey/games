@@ -114,9 +114,15 @@ export default async function LeaderboardPage() {
                     <span
                       className={`rank-cell ${rankClass}`}
                       style={
-                        tier.kind === "podium"
-                          ? ({ "--rank-color": tier.color, color: tier.color } as React.CSSProperties)
-                          : ({ "--rank-color": tier.color } as React.CSSProperties)
+                        {
+                          // Each row's shimmer is staggered by 0.7s so a
+                          // full podium (3 rows) lights up over ~2s; by
+                          // the time row 15 catches fire, row 1 is about
+                          // to shine again (10s cycle).
+                          "--shimmer-delay": `${(i * 0.7) % 10}s`,
+                          "--rank-color": tier.color,
+                          ...(tier.kind === "podium" ? { color: tier.color } : {}),
+                        } as React.CSSProperties
                       }
                     >
                       {r.rank}
