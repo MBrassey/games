@@ -16,12 +16,24 @@ function fmtDate(iso: string): string {
   });
 }
 
+// Rarity drives the tile's glow color. Legendary is warmer than the
+// portal's purple accent on purpose — a legendary unlock should read
+// differently from the game's own branding.
 const RARITY_COLOR: Record<string, string> = {
   common: "#8a8a9e",
   uncommon: "#33ff66",
   rare: "#66e0ff",
   legendary: "#ffd54a",
 };
+
+// Common achievements glow in the game's own accent (cohesive with the
+// game's branding); higher rarities always use the rarity palette above
+// so a legendary in any game reads as "legendary" at a glance.
+function glowColor(rarity: string | undefined, accent: string): string {
+  const r = rarity ?? "common";
+  if (r === "common") return accent;
+  return RARITY_COLOR[r] ?? accent;
+}
 
 // Shared renderer for both the signed-in stats page and public profile
 // pages. Pure server component — caller is responsible for shaping the
@@ -74,24 +86,31 @@ export default function AchievementsPanel({ groups }: { groups: GameGroup[] }) {
                   const isLocked = !unlocked;
                   const hide = a.hidden && isLocked;
                   const rarityColor = RARITY_COLOR[a.rarity ?? "common"] ?? RARITY_COLOR.common;
+                  const glow = glowColor(a.rarity, accent);
+                  const isLegendary = a.rarity === "legendary";
+
                   return (
                     <li
                       key={a.key}
-                      className={`flex gap-3 items-start border border-eldritch-deep/40 p-2.5 bg-void-1/40 ${
-                        isLocked ? "opacity-55" : ""
+                      className={`ach-tile flex gap-3 items-start border border-eldritch-deep/40 p-2.5 bg-void-1/40 ${
+                        isLocked
+                          ? "opacity-55"
+                          : `ach-tile-unlocked ${isLegendary ? "ach-tile-legendary" : ""}`
                       }`}
                       style={
                         !isLocked
-                          ? { boxShadow: `inset 0 0 0 1px ${accent}55` }
+                          ? ({ "--ach-glow": glow } as React.CSSProperties)
                           : undefined
                       }
                     >
                       <div
-                        className="flex-shrink-0 w-10 h-10 flex items-center justify-center font-mono text-xl border border-eldritch-deep/60 bg-void-0"
+                        className={`flex-shrink-0 w-10 h-10 flex items-center justify-center font-mono text-xl border border-eldritch-deep/60 bg-void-0 ${
+                          !isLocked ? "ach-icon-unlocked" : ""
+                        }`}
                         style={
-                          !isLocked
-                            ? { color: accent, textShadow: `0 0 8px ${accent}88`, borderColor: `${accent}88` }
-                            : { color: "#4a4560" }
+                          isLocked
+                            ? { color: "#4a4560" }
+                            : undefined
                         }
                       >
                         {a.icon ? (
@@ -99,24 +118,33 @@ export default function AchievementsPanel({ groups }: { groups: GameGroup[] }) {
                           <img
                             src={`/games/${g.game}/${a.icon}`}
                             alt=""
-                            className="w-8 h-8 object-contain"
-                            style={{ filter: isLocked ? "grayscale(1) brightness(0.4)" : undefined }}
+                            className="w-8 h-8 object-contain relative z-[1]"
+                            style={{
+                              filter: isLocked
+                                ? "grayscale(1) brightness(0.4)"
+                                : `drop-shadow(0 0 4px ${glow}aa)`,
+                            }}
                           />
                         ) : (
-                          <span>{hide ? "?" : a.glyph ?? "★"}</span>
+                          <span className="relative z-[1]">{hide ? "?" : a.glyph ?? "★"}</span>
                         )}
                       </div>
-                      <div className="min-w-0 flex-1">
+                      <div className="min-w-0 flex-1 relative z-[1]">
                         <div className="flex items-baseline gap-2 flex-wrap">
                           <span
                             className="text-sm text-bone truncate"
-                            style={!isLocked ? { textShadow: `0 0 6px ${accent}55` } : undefined}
+                            style={!isLocked ? { textShadow: `0 0 6px ${glow}66` } : undefined}
                           >
                             {hide ? "??? hidden achievement" : a.title}
                           </span>
                           <span
                             className="text-[0.58rem] uppercase tracking-[0.18em]"
-                            style={{ color: rarityColor }}
+                            style={{
+                              color: rarityColor,
+                              textShadow: !isLocked
+                                ? `0 0 6px ${rarityColor}55`
+                                : undefined,
+                            }}
                           >
                             {a.rarity ?? "common"}
                           </span>
@@ -128,7 +156,10 @@ export default function AchievementsPanel({ groups }: { groups: GameGroup[] }) {
                           {hide ? "complete to reveal" : a.description || ""}
                         </p>
                         {unlocked && (
-                          <p className="text-[0.58rem] uppercase tracking-[0.18em] text-matrix-green mt-1 font-mono">
+                          <p
+                            className="text-[0.58rem] uppercase tracking-[0.18em] mt-1 font-mono"
+                            style={{ color: glow, textShadow: `0 0 6px ${glow}66` }}
+                          >
                             ▸ unlocked {fmtDate(unlocked.unlockedAt)}
                           </p>
                         )}

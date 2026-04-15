@@ -600,6 +600,46 @@ The unlock endpoint has no hard rate limit, but:
   (enemy-death, boss-defeated, level-complete). Calling it every frame
   is wasteful even if harmless.
 
+### What the player sees when you unlock
+
+The moment your game emits the magic print line, the portal overlays a
+**Steam-style toast** over the iframe:
+
+- Icon (your `glyph` or `icon` PNG) framed by a radial glow in the
+  rarity color (common = the game's accent; uncommon = green; rare =
+  cyan; legendary = gold).
+- **"▸ ACHIEVEMENT UNLOCKED"** stamp in the rarity color.
+- Title + description.
+- Rarity label and point value (e.g. `+50 pts`) on the right.
+- A diagonal shimmer "glint" sweeps across on entry; legendary gets a
+  stronger, gold-cored glint.
+- A breathing box-shadow pulse keeps the tile visually alive for its
+  ~5-second dwell.
+- A short synthesized fanfare plays (D-major triad up to the octave
+  with a glittery high-bell tail), slightly ducking the ambient
+  soundtrack.
+
+The toast:
+
+- Auto-dismisses after ~5 seconds (or immediately on click).
+- Up to 3 stack simultaneously; extras queue and render as earlier
+  ones exit — e.g. triggering three unlocks in the same frame is
+  handled gracefully.
+- Only fires on **fresh** unlocks (`fresh: true` from the server). A
+  replay unlock is a silent no-op — so you don't need dedup logic on
+  the game side before calling `print("[[LOVEWEB_ACH]]unlock …")`.
+- Is purely portal-side. Desktop LÖVE runs never see it (no `print`
+  interception there), so it won't interfere with a native build.
+- Respects `prefers-reduced-motion`: the glow/gradient stay, the
+  animated sweeps are dropped.
+
+**Game author implication:** you never need to render your own
+unlock banner. Fire the print line, and the portal handles the
+celebration. If you want an **in-game** notification too (e.g. for
+players running your game standalone on desktop), gate it on your own
+local state — the portal reading `__loveweb__/achievements.json` and
+responding to it is orthogonal.
+
 ---
 
 ## Bridge protocol reference
