@@ -150,16 +150,10 @@ export default function GameRunner({
     };
   }, []);
 
-  // Soft-mute the portal music while a game page is loaded, without
-  // tearing down the audio engine. UI SFX still work; navigating back
-  // fades music in again. Important: we don't call sound.disable() /
-  // sound.enable() here — those dispose and recreate audio nodes, which
-  // made non-game link clicks occasionally kill music due to a race
-  // between stopMusic's delayed cleanup and a fresh startMusic.
-  useEffect(() => {
-    const restore = sound.softMuteMusic();
-    return () => { restore(); };
-  }, []);
+  // Music plays consistently across all pages — including game pages.
+  // The user's mute button controls only the soundtrack; no per-page
+  // suppression. Removed the old softMuteMusic() effect that used to
+  // silence music here and restore it on unmount.
 
   // Playtime tracking. Every 30s we POST to /api/stats/heartbeat, but
   // ONLY if the player has been interactive within the last 2 minutes
