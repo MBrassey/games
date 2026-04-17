@@ -180,7 +180,8 @@ class SoundEngine {
   private nextScheduleAt = 0; // next beat time (absolute, ctx.currentTime scale)
   private beatIndex = 0;
   private schedulerTimer: number | null = null;
-  private enabled = false;
+  private enabled = false;       // true = AudioContext is running; gates ALL audio
+  private musicMuted = false;    // true = user explicitly muted via button; gates ONLY music, not SFX
   private lastHover = 0;
   private lastHoverVariant = -1;
   private lastClickVariant = -1;
@@ -261,35 +262,54 @@ class SoundEngine {
     return this.enabled;
   }
 
+  /** Unlock the AudioContext and mark the engine as active. Called on
+   *  every user gesture via SoundBoot and eagerly on mount. Safe to
+   *  call repeatedly — fast no-op when already enabled.
+   *
+   *  `silent: true` skips the boot chime (used by the eager auto-mount
+   *  path so SPA navigation doesn't play a startup fanfare every time).
+   *
+   *  Respects `musicMuted`: if the user has pressed Mute, the engine
+   *  still unlocks (SFX need the context running) but music won't start. */
   async enable(options?: { silent?: boolean }): Promise<void> {
     const ctx = this.ensure();
     if (!ctx) return;
     if (ctx.state === "suspended") {
-      try { await ctx.resume(); } catch { /* browsers can throw if no
-        gesture has happened yet — we silently retry on the next
-        engage path, see SoundBoot.tsx */ }
+      try { await ctx.resume(); } catch { /* retry on next gesture */ }
     }
-    // Only consider the engine truly enabled if the context is actually
-    // running. Eager mount calls (no gesture yet) typically leave ctx
-    // in "suspended" despite a resolved resume() promise; treating that
-    // as "enabled" would otherwise schedule audio events that never
-    // make sound.
     if (ctx.state !== "running") return;
     if (!this.enabled) {
       this.enabled = true;
-      // `silent: true` is used by the eager auto-mount path so users
-      // don't get a startup chime every time they navigate within the
-      // SPA. The mute-button "unmute" flow still fires the chime, since
-      // that IS an explicit "turn audio on" action worth acknowledging.
       if (!options?.silent) this.boot();
-      this.startMusic();
+      if (!this.musicMuted) this.startMusic();
     }
   }
 
-  disable(): void {
-    if (!this.enabled) return;
-    this.enabled = false;
+  /** Pre-set the mute flag before enable() runs, so the first
+   *  `enable()` call knows not to start music. Used by SoundBoot to
+   *  apply the persisted localStorage preference. */
+  setMusicMuted(v: boolean): void {
+    this.musicMuted = v;
+  }
+
+  /** Mute only the background music. SFX keep playing — the mute
+   *  button controls the soundtrack, not the interface. */
+  muteMusic(): void {
+    this.musicMuted = true;
     this.stopMusic();
+  }
+
+  /** Unmute the background music. Starts it immediately if the engine
+   *  is enabled (context running). */
+  unmuteMusic(): void {
+    this.musicMuted = false;
+    if (this.enabled) this.startMusic();
+  }
+
+  /** Legacy alias. Kept so existing callers compile but now only mutes
+   *  music — does NOT set enabled=false (SFX must keep working). */
+  disable(): void {
+    this.muteMusic();
   }
 
   // --- internal helpers ---

@@ -4,13 +4,12 @@ import { useEffect, useState } from "react";
 import { sound } from "@/lib/sound";
 import { MUTE_STORAGE_KEY } from "./SoundBoot";
 
-// Audio defaults to ON. The button is optimistic — it reads "audio on"
-// until the user explicitly mutes, and that choice persists across
-// sessions via localStorage. Clicking mutes everything (music + SFX).
-// Clicking again resumes.
+// The mute button controls ONLY the background music. Interface SFX
+// (hover, click, confirm, deny, notify, etc.) always play regardless
+// of mute state — the AudioContext stays running, only the music bus
+// is silenced. This matches the user's expectation: "mute the
+// soundtrack, not the whole console."
 export default function MuteButton() {
-  // Start optimistic: on load we ASSUME audio will be on. We reconcile
-  // with the engine state + stored preference once we're on the client.
   const [muted, setMuted] = useState<boolean>(false);
 
   useEffect(() => {
@@ -21,12 +20,14 @@ export default function MuteButton() {
 
   const toggle = async () => {
     if (muted) {
-      // Unmute: this click IS the user gesture that unlocks the context.
+      // Unmute music. Also ensure the context is unlocked (this click
+      // counts as a gesture). enable() is a no-op if already enabled.
       await sound.enable();
+      sound.unmuteMusic();
       setMuted(false);
       try { localStorage.removeItem(MUTE_STORAGE_KEY); } catch {}
     } else {
-      sound.disable();
+      sound.muteMusic();
       setMuted(true);
       try { localStorage.setItem(MUTE_STORAGE_KEY, "1"); } catch {}
     }
@@ -36,15 +37,15 @@ export default function MuteButton() {
     <button
       onClick={toggle}
       className="btn"
-      title={muted ? "muted — click to resume" : "audio on — click to mute"}
-      aria-label={muted ? "unmute" : "mute audio"}
+      title={muted ? "music muted — click to resume" : "music on — click to mute"}
+      aria-label={muted ? "unmute music" : "mute music"}
       aria-pressed={!muted}
     >
       <span className={muted ? "text-bone/50" : "text-abyss-cyan"}>
         {muted ? "◌" : "◉"}
       </span>
       <span className={`ml-1.5 ${muted ? "text-bone/50" : ""}`}>
-        {muted ? "muted" : "audio"}
+        {muted ? "muted" : "music"}
       </span>
     </button>
   );
