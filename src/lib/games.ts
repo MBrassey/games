@@ -45,26 +45,9 @@ export function lovePath(slug: string): string {
   return `/games/${slug}/game.love`;
 }
 
+// Newest games first. Library grid renders in array order, so prepend
+// new entries here to keep "latest at the top-left."
 export const GAMES: GameEntry[] = [
-  {
-    slug: "claude-mythos",
-    title: "Claude: Mythos",
-    codename: "CLAUDE.MYTHOS",
-    tagline: "An eldritch bullet survivor descent into the void sea.",
-    description:
-      "A wave-based arcade survivor threaded with eldritch horror. Navigate the void sea, build decks of cosmic powers, and hold the line against the rising tide of the deep.",
-    author: "ThePearlKing",
-    version: "head",
-    category: "action",
-    tags: ["bullet-hell", "roguelite", "eldritch", "cards"],
-    year: 2026,
-    repo: "ThePearlKing/claude-mythos-game",
-    ref: "main",
-    identity: "claude_mythos",        // matches the game's conf.lua t.identity
-    accentColor: "#8a4fff",
-    multiplayer: "single",
-    status: "live",
-  },
   {
     slug: "zmine",
     title: "ZMINE — Zepton Mining",
@@ -81,6 +64,25 @@ export const GAMES: GameEntry[] = [
     ref: "main",
     identity: "zmine",                // matches the game's conf.lua t.identity
     accentColor: "#3eff8b",
+    multiplayer: "single",
+    status: "live",
+  },
+  {
+    slug: "claude-mythos",
+    title: "Claude: Mythos",
+    codename: "CLAUDE.MYTHOS",
+    tagline: "An eldritch bullet survivor descent into the void sea.",
+    description:
+      "A wave-based arcade survivor threaded with eldritch horror. Navigate the void sea, build decks of cosmic powers, and hold the line against the rising tide of the deep.",
+    author: "ThePearlKing",
+    version: "head",
+    category: "action",
+    tags: ["bullet-hell", "roguelite", "eldritch", "cards"],
+    year: 2026,
+    repo: "ThePearlKing/claude-mythos-game",
+    ref: "main",
+    identity: "claude_mythos",        // matches the game's conf.lua t.identity
+    accentColor: "#8a4fff",
     multiplayer: "single",
     status: "live",
   },
