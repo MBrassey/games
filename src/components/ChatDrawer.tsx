@@ -82,7 +82,15 @@ export default function ChatDrawer({
   meHandle: string | null;
   gameSlug?: string;
 }) {
-  const [open, setOpen] = useState(true);
+  // Chat opens by default on desktop; collapsed on mobile so the drawer
+  // never takes over the screen on first paint. Player taps the rail to
+  // open it. Authentication is NOT required to use the rest of the
+  // portal — chat is the only feature gated behind auth, and even then
+  // the gate is a small inline nudge, not a wall.
+  const [open, setOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return window.matchMedia("(min-width: 768px)").matches;
+  });
   const [channel, setChannel] = useState<string>(
     gameSlug ? `chat:game:${gameSlug}` : "chat:global"
   );
@@ -195,8 +203,8 @@ export default function ChatDrawer({
       // softens the particles without smearing them into mud, and a
       // subtle linear gradient deepens the top/bottom edges so the chat
       // chrome still has some weight against the motion behind it.
-      className={`fixed right-0 top-14 z-30 flex h-[calc(100vh-3.5rem)] flex-col border-l border-eldritch-deep/60 bg-gradient-to-b from-void-0/35 via-void-0/20 to-void-0/35 backdrop-blur-[1px] transition-all ${
-        open ? "w-[380px]" : "w-10"
+      className={`fixed right-0 top-14 z-30 flex h-[calc(100vh-3.5rem)] flex-col border-l border-eldritch-deep/60 bg-gradient-to-b from-void-0/65 via-void-0/55 to-void-0/65 backdrop-blur-md transition-all ${
+        open ? "w-[min(380px,92vw)]" : "w-10"
       }`}
     >
       <button
@@ -241,20 +249,18 @@ export default function ChatDrawer({
 
           <div ref={listRef} className="flex-1 overflow-y-auto py-1 text-sm scrollbar-slim">
             {!signedIn ? (
-              // Channel traffic is gated behind auth, both server-side (the
-              // /api/chat/stream route 401s without a session cookie) and
-              // client-side here — unauthenticated visitors see only a
-              // locked-feed prompt, never any message body or handle.
-              // Double belt: if for any reason `messages` ever contained
-              // rows while signedIn was false (e.g. session expired mid-
-              // session), we wouldn't render them.
+              // Chat is the only feature gated behind auth — the rest of
+              // the portal works fine without sign-in. Render a small
+              // friendly nudge, not a full-screen wall, so guests aren't
+              // pushed into the auth flow just to play a game.
               <div className="flex flex-col items-center justify-center h-full p-6 text-center gap-3">
-                <div className="stamp text-eldritch-purple">uplink :: sealed</div>
+                <div className="stamp text-bone/45">chat // optional</div>
                 <p className="text-bone/55 text-xs leading-relaxed">
-                  Channel traffic is visible only to authenticated operators.
+                  You can play every game without an account. Sign in to
+                  chat with other operators and sync saves across devices.
                 </p>
                 <a href="/signin" className="btn cyan mt-1 text-[0.65rem]">
-                  ▸ Authenticate
+                  ▸ Sign in
                 </a>
               </div>
             ) : (
@@ -298,8 +304,8 @@ export default function ChatDrawer({
                 </button>
               </form>
             ) : (
-              <a href="/signin" className="btn cyan w-full justify-center">
-                ▸ Authenticate
+              <a href="/signin" className="btn cyan w-full justify-center text-[0.7rem]">
+                ▸ Sign in to chat
               </a>
             )}
           </div>

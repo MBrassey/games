@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { sound } from "@/lib/sound";
 import { gameIdentity, getGame } from "@/lib/games";
 import AchievementToast, { type ToastItem } from "./AchievementToast";
+import MobileControls from "./MobileControls";
 import type { AchievementDef } from "@/lib/achievements";
 
 type IncomingMsg =
@@ -633,11 +634,17 @@ pnpm build:claude-mythos
   // 16:9 aspect ratio allows given available vertical space (100vh minus
   // header + page title + status bar + a bit of breathing room). The CSS
   // min() picks whichever axis is the binding constraint.
-  const VERT_CHROME = 200; // px reserved for header + page title + status bar + padding
+  //
+  // Mobile: chrome is much tighter (~120px: header + title + status) and
+  // the player wants every pixel they can get, so the desktop 200px
+  // reserve would leave a tiny letterboxed canvas in portrait. We use
+  // CSS env(safe-area-inset-*) to dodge home-indicators on iOS.
   const frameStyle = {
-    maxHeight: `calc(100vh - ${VERT_CHROME}px)`,
-    // width that maxes out at (max-height * 16/9) so vertical never spills
-    width: `min(100%, calc((100vh - ${VERT_CHROME}px) * 16 / 9))`,
+    // svh is the small-viewport unit — accounts for mobile browser
+    // chrome that retracts on scroll. Falling back to vh on browsers
+    // without svh support still works; just slightly conservative.
+    maxHeight: `calc(100svh - var(--game-chrome, 200px))`,
+    width: `min(100%, calc((100svh - var(--game-chrome, 200px)) * 16 / 9))`,
     aspectRatio: "16 / 9" as const,
   };
 
@@ -692,6 +699,13 @@ pnpm build:claude-mythos
           <span aria-hidden="true">↩</span>
           <span>exit</span>
         </Link>
+        {/* Mobile touch overlay. No-op on desktop. The component itself
+            checks `pointer:coarse` and the per-game `controls` config
+            to decide what (if anything) to render. Synthesizes
+            keyboard events into the iframe so games author for desktop
+            input remain playable on a phone without any game-side
+            change. */}
+        <MobileControls iframeRef={iframeRef} config={gameMeta?.controls} />
         {/* Clean-exit overlay — shown when the game signaled love.event.quit
             (or onExit/onAbort). Auto-routes to /; the text here is just a
             friendly hand-off. */}
@@ -712,11 +726,11 @@ pnpm build:claude-mythos
           </div>
         )}
       </div>
-      <div className="mt-3 w-full flex items-center justify-between text-[0.65rem] uppercase tracking-[0.25em] text-bone/50">
-        <div className="flex items-center gap-3">
-          <span className={`inline-block h-1.5 w-1.5 rounded-full ${booted ? "bg-matrix-green shadow-[0_0_8px_#33ff66]" : "bg-amber-signal"}`} />
-          {booted ? "runtime ready" : "loading…"}
-          {!signedIn && <span className="text-amber-signal ml-3">· not signed in — saves disabled</span>}
+      <div className="mt-3 w-full flex items-center justify-between gap-2 text-[0.6rem] sm:text-[0.65rem] uppercase tracking-[0.2em] sm:tracking-[0.25em] text-bone/50">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <span className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${booted ? "bg-matrix-green shadow-[0_0_8px_#33ff66]" : "bg-amber-signal"}`} />
+          <span className="truncate">{booted ? "runtime ready" : "loading…"}</span>
+          {!signedIn && <span className="hidden sm:inline text-bone/45 ml-2">· sign in to save progress</span>}
         </div>
         {/* Reliable exit path. Lives OUTSIDE the iframe so it still works
             even if the Lua runtime has frozen itself with love.event.quit()

@@ -29,6 +29,17 @@ export type GameEntry = {
   accentColor: string;               // hex accent used throughout the portal
   multiplayer: "single" | "coop" | "mmo";
   status: "live" | "beta" | "soon";
+
+  // Mobile touch controls. The portal renders an overlay on touch
+  // devices that synthesizes keyboard / mouse events into the iframe so
+  // games that were authored for keyboard play work on a phone without
+  // any game-side change. "tap" disables the joystick (game already
+  // handles raw touches via love.touch / love.mousepressed); "off"
+  // removes the overlay entirely.
+  controls?: {
+    mode: "movement" | "tap" | "off";
+    actions?: Array<{ code: string; label: string }>; // right-side buttons
+  };
 };
 
 // Resolve the effective LÖVE identity for a game — explicit entry
@@ -66,6 +77,9 @@ export const GAMES: GameEntry[] = [
     accentColor: "#3eff8b",
     multiplayer: "single",
     status: "live",
+    // Tycoon UI is mouse/tap-driven; raw browser touches already reach
+    // love.js. Skip the joystick overlay.
+    controls: { mode: "tap" },
   },
   {
     slug: "claude-mythos",
@@ -85,6 +99,13 @@ export const GAMES: GameEntry[] = [
     accentColor: "#8a4fff",
     multiplayer: "single",
     status: "live",
+    controls: {
+      mode: "movement",
+      actions: [
+        { code: "Space",   label: "✦" },
+        { code: "KeyE",    label: "E" },
+      ],
+    },
   },
 ];
 
