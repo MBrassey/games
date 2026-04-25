@@ -15,6 +15,17 @@
   --ok: #33ff66;
   --amber: #ffb347;
   --grid: rgba(138, 79, 255, 0.08);
+  /* Vertical chrome reserved by GameRunner so the iframe doesn't spill
+     off the viewport. Desktop reserves room for the topbar (56px) +
+     page title (~36px) + status row (~28px) + breathing room (~80px).
+     Mobile compresses everything and adds safe-area for iOS home bars. */
+  --game-chrome: 200px;
+}
+
+@media (max-width: 767px) {
+  :root {
+    --game-chrome: calc(120px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 html, body {

@@ -6,28 +6,27 @@ export default function HeroBanner() {
     <section className="relative overflow-hidden border-b border-eldritch-deep/50">
       <div className="absolute inset-0 bg-grid opacity-60" />
       <div className="scan-sweep" />
-      <div className="relative mx-auto max-w-7xl px-6 py-16 md:py-24">
+      <div className="relative mx-auto max-w-7xl px-4 sm:px-6 py-10 sm:py-16 md:py-24">
         <div className="max-w-3xl">
           <div className="stamp text-eldritch-purple">games :: brassey :: io</div>
-          <h1 className="mt-3 text-4xl md:text-6xl tracking-[0.08em] leading-[1.05] text-bone">
+          <h1 className="mt-3 text-3xl sm:text-4xl md:text-6xl tracking-[0.05em] sm:tracking-[0.08em] leading-[1.08] text-bone">
             a terminal for
             <br />
             <span className="text-abyss-cyan glow-cyan">LÖVE2D</span>
             <span className="text-bone/40"> // </span>
             <span className="text-eldritch-purple glow-accent">web native</span>.
           </h1>
-          <p className="mt-5 max-w-xl text-sm md:text-base text-bone/70 leading-relaxed">
-            Launch hand-built LÖVE2D games straight from the browser. Saves sync
-            across every device you sign in on. A ship-wide chat runs over the
-            top so every player is in the same room — no matter which game
-            they&apos;re running.
+          <p className="mt-4 sm:mt-5 max-w-xl text-sm md:text-base text-bone/70 leading-relaxed">
+            Launch hand-built LÖVE2D games straight from the browser. No account
+            required to play. Sign in only if you want to sync saves across
+            devices and chat with other operators.
           </p>
-          <div className="mt-7 flex flex-wrap items-center gap-3">
+          <div className="mt-6 sm:mt-7 flex flex-wrap items-center gap-2 sm:gap-3">
             <a href="#library" className="btn cyan">▸ enter catalog</a>
             <a href={`/games/${feat.slug}`} className="btn">
               ▸ boot {feat.codename.toLowerCase()}
             </a>
-            <span className="ml-3 text-[0.7rem] tracking-[0.25em] uppercase text-bone/40">
+            <span className="ml-1 sm:ml-3 text-[0.62rem] sm:text-[0.7rem] tracking-[0.2em] sm:tracking-[0.25em] uppercase text-bone/40">
               v{feat.version} // {feat.year}
             </span>
           </div>
