@@ -15,8 +15,9 @@ leaderboard integration all come for free.
 4. **Declare achievements** in `achievements.json` at your repo root,
    unlock them with `print("[[LOVEWEB_ACH]]unlock <key>")`.
 5. **Don't write to `__loveweb__/`** — that path is reserved for
-   portal-managed metadata.
-6. **Don't use threads, sockets, or video.** `love.filesystem`,
+   portal-managed metadata (identity, achievements, net inbox).
+6. **For multiplayer**, use the `[[LOVEWEB_NET]]` magic-print verbs.
+   No raw sockets, no threads, no `love.video` — `love.filesystem`,
    `love.graphics`, `love.audio`, `love.keyboard`, `love.mouse`,
    `love.physics`, `love.math`, and `love.timer` are all fine.
 7. **Repo must be public on GitHub.** The portal clones fresh on every
@@ -40,7 +41,7 @@ a sharp-edges list and a copy-paste starter skeleton.
 8. [Filesystem and save state](#filesystem-and-save-state)
 9. [Reserved paths](#reserved-paths)
 10. [Player identity](#player-identity)
-11. [Networking, threads, video](#networking-threads-video)
+11. [Multiplayer & shared world](#multiplayer--shared-world)
 12. [Achievements](#achievements)
 13. [Runtime UI effects](#runtime-ui-effects)
 14. [Bridge protocol reference](#bridge-protocol-reference)
@@ -148,11 +149,16 @@ you are forward-compatible with LÖVE 12 too.
 | `love.image` (decoders)      | ✅     | PNG, JPG, DDS. No EXR.                                |
 | `love.sound` / `love.audio` decoders | ✅ | OGG Vorbis, WAV. MP3 works but prefer OGG.      |
 
-TCP/UDP sockets: **no LuaSocket** ships with love.js. If you need
-network play, that's out of scope for this portal's shared runtime —
-you'd have to host a game-specific socket server and your Lua code
-would need an HTTP polling fallback. The portal intentionally doesn't
-solve this in v1.
+TCP/UDP sockets: **no LuaSocket** ships with love.js, and games on the
+portal **must not** open raw sockets. The portal provides a complete
+multi-user layer (rooms, presence, event broadcast, persistent room
+state) that you reach via the `[[LOVEWEB_NET]]` magic-print verbs —
+see [Multiplayer & shared world](#multiplayer--shared-world). Effective
+event-delivery cadence is sub-second when active; the right substrate
+for MMORPG-style worlds, lobbies, turn-based games, and chat. For
+60Hz twitch shooters with shared simulation, you'll need to fall back
+to single-player or hot-seat coop until/unless we add a separate
+high-tick-rate socket server.
 
 ---
 
@@ -458,40 +464,294 @@ Everything else is yours.
 
 ## Player identity
 
-Your game runs in an iframe. **It cannot see the portal user's
-numeric ID or GitHub handle directly.** Intentional — saves and
-achievements are bound to the session cookie on the portal's side, and
-the game never handles auth.
+The portal injects the signed-in player's identity into your save dir
+**before `love.load()` runs**, at:
 
-Practical consequence: if you want to show "Welcome back, <name>" in
-your own UI, you can't read it from the portal. Either:
+```
+<save-dir>/__loveweb__/identity.json
+```
 
-- Ask the player for a display name in-game and store it in your save
-  files (standard approach — works the same on desktop).
-- Don't bother. Save files are already per-user, so "your save" is
-  the right concept.
+Schema:
 
-If you really need a stable "this is the same user" identifier across
-sessions, write a random UUID to your save dir on first boot. It'll be
-cloud-synced with the rest of their save.
+```json
+{
+  "signedIn": true,
+  "userId":   "42",          // stable string id (BIGINT serialized)
+  "handle":   "thepearlking", // GitHub login or override; stable per user
+  "avatar":   "https://avatars.githubusercontent.com/u/...png"
+}
+```
+
+For an unauthenticated session the file still exists but reads as
+`{ "signedIn": false }`. Treat that as a signal to fall back to a
+locally-stored display name (or a guest UUID written into your own save
+on first boot).
+
+```lua
+local function loadIdentity()
+  if not love.filesystem.getInfo("__loveweb__/identity.json") then
+    return { signedIn = false }
+  end
+  local ok, data = pcall(json.decode, love.filesystem.read("__loveweb__/identity.json"))
+  if not ok or type(data) ~= "table" then return { signedIn = false } end
+  return data
+end
+
+function love.load()
+  local me = loadIdentity()
+  if me.signedIn then
+    Player.handle  = me.handle
+    Player.avatar  = me.avatar
+    Player.userId  = me.userId
+  else
+    Player.handle = "guest-" .. love.math.random(1000, 9999)
+  end
+end
+```
+
+Identity is **hot-rewritten** if it changes mid-session (rare: only
+happens on a SPA-style navigation between games while signed in), so a
+game that re-reads the file in response to a `love.focus(true)` event
+always sees the current value. Don't poll it every frame; once-per-load
+plus on focus-regain is plenty.
 
 ---
 
-## Networking, threads, video
+## Multiplayer & shared world
 
-Three big "don't":
+The portal ships a complete multi-user layer for LÖVE2D games. Same
+trust model as save sync — your game **never** talks HTTP directly.
+You emit `print("[[LOVEWEB_NET]]<verb> <args>")` lines, the runtime
+forwards them to the portal server, and the responses + live event
+stream land as files in `__loveweb__/net/` that you tail with
+`love.filesystem.*`. No JS interop. No HTTP keys in your bundle. No
+sockets.
 
-1. **No network sockets.** LuaSocket isn't bundled. If your design
-   needs online play, you'll need to host a dedicated server and use
-   `love.data` + a plain XHR/WebSocket bridge via the runtime — but
-   the portal's built-in bridge doesn't provide one, so it's all
-   custom infrastructure. Out of scope for single-player and hot-seat
-   coop.
-2. **No `love.thread`.** Coroutines (`coroutine.create/resume/yield`)
-   are fine and run cooperatively on the main thread. Use them for
-   async work.
-3. **No `love.video`.** If you want a title-screen video, render it as
-   a sprite sheet.
+### What it gives you
+
+- **Rooms.** Named, capacity-bounded joinable spaces scoped to your
+  game. Public rooms are listable; unlisted rooms join by 6-char code.
+- **Event broadcast.** Any member sends an event with a verb of your
+  choice and a JSON payload; every other member receives it through
+  Server-Sent Events with sub-second latency.
+- **Persistent room state.** A JSONB blob attached to the room. Merge
+  patches into it (with optional CAS via `expectedVersion`) and the
+  whole room is notified when it changes. Survives reconnects, late
+  joiners, and the portal redeploying.
+- **Live presence.** A roster of online members, refreshed when people
+  join, leave, or stop heartbeating (60s grace).
+- **Catch-up on reconnect.** The SSE stream backfills the last ~50
+  events when the player reconnects, so a momentary network drop
+  doesn't desync your simulation state.
+- **Per-user rate-limit.** Send is capped at 12/s burst 24/s per
+  (user, room). Above that, sends 429 — the runtime surfaces it via
+  `__loveweb__/net/last_result.json`.
+
+### Tick-rate guidance
+
+The portal is a Vercel-only stack (no persistent WebSocket). Effective
+event-delivery cadence is **~750 ms when active, backing off to 8 s
+when the room is idle**. That makes it the right substrate for:
+
+- MMORPG-style worlds (chat, slow movement, presence)
+- Turn-based / hot-seat games (shared state is the source of truth)
+- Lobbies, matchmaking, party chat
+- Asynchronous interactions (mail, gifts, leaderboards-with-context)
+- Co-op exploration where 1–2 Hz updates feel fine
+- Real-time chat between players outside the global #channels
+
+It is **not** a fit for 60Hz fighting games or twitch shooters with
+shared simulation. For those, the room state is still useful as a
+session/lobby coordinator, but the actual gameplay simulation needs to
+stay client-authoritative or local-only.
+
+### Files in `__loveweb__/net/`
+
+| Path                              | Written by                | Contains                                                |
+|-----------------------------------|---------------------------|---------------------------------------------------------|
+| `__loveweb__/identity.json`       | runtime, before love.load | The signed-in player's identity (see above section).    |
+| `__loveweb__/net/room.json`       | runtime, on room join     | `{ roomId, mode, state, stateVersion, connectedAt }`.   |
+| `__loveweb__/net/roster.json`     | runtime, on roster delta  | `{ roomId, members: [{userId, handle, avatar, joinedAt, lastSeen}], at }`. |
+| `__loveweb__/net/inbox.jsonl`     | runtime, on every event   | Append-only JSONL log of delivered `NetEvent`s. Trimmed once it crosses ~256 KB. |
+| `__loveweb__/net/status.json`     | runtime, on conn changes  | `{ status: "connected" \| "disconnected" \| "closed", roomId, at }`. |
+| `__loveweb__/net/last_result.json`| runtime, after each verb  | The most recent `*:result` envelope (incl. `error` if any). |
+
+The save-watch loop excludes `__loveweb__/` entirely, so none of these
+files round-trip into your `game_saves` rows.
+
+### Magic-print verbs
+
+```lua
+-- Create + auto-join a public room. Result lands in last_result.json:
+--   { ok = true,  room = { id, code, name, capacity, ... } }
+--   { ok = false, error = "..." }
+print("[[LOVEWEB_NET]]create lobby Anglerfish Den")
+
+-- Join an existing room by its 6-char code (case-insensitive on the way
+-- in; canonical form is uppercase). Result schema same as create.
+print("[[LOVEWEB_NET]]join 7HQ4N2")
+
+-- Leave the current room. Idempotent — calling twice is safe.
+print("[[LOVEWEB_NET]]leave")
+
+-- List public rooms for THIS game. Result:
+--   { type="loveweb:net:list:result", rooms=[{id,code,name,memberCount,onlineCount,...}] }
+print("[[LOVEWEB_NET]]list")
+
+-- Broadcast an event to every other member of the room. The verb must
+-- match `^[a-z][a-z0-9_]*$` and not collide with reserved verbs
+-- (join, leave, state, presence, kick).
+print('[[LOVEWEB_NET]]send move {"x":124.5,"y":-87.2,"facing":"left"}')
+
+-- Merge a patch into the room's persistent state. Default is shallow
+-- merge (jsonb `||` operator); pass replace=true (via Lua wrapper) to
+-- overwrite. Server bumps state_version and emits a `state` event so
+-- everyone re-syncs.
+print('[[LOVEWEB_NET]]state {"phase":"voting","timer":90}')
+```
+
+### Lua wrapper
+
+Drop this in as `net.lua`:
+
+```lua
+-- net.lua — thin wrapper over the [[LOVEWEB_NET]] magic-print protocol.
+local json = require "lib.json"
+
+local M = {
+  room      = nil,        -- { id, code, name, capacity, ownerId, ... } once joined
+  state     = {},         -- last-seen room state (live-updated by tick)
+  members   = {},         -- last-seen roster
+  status    = "idle",     -- "idle" | "connecting" | "connected" | "disconnected" | "closed"
+  watermark = "0",        -- highest event id we've consumed
+  identity  = nil,        -- { signedIn, handle, userId, avatar }
+}
+
+local function readJson(path)
+  if not love.filesystem.getInfo(path) then return nil end
+  local ok, data = pcall(json.decode, love.filesystem.read(path))
+  if not ok then return nil end
+  return data
+end
+
+function M.refreshIdentity()
+  M.identity = readJson("__loveweb__/identity.json") or { signedIn = false }
+end
+
+function M.create(name)         print("[[LOVEWEB_NET]]create " .. (name or "room"))   end
+function M.join(code)           print("[[LOVEWEB_NET]]join "   .. (code or ""))       end
+function M.leave()              print("[[LOVEWEB_NET]]leave")                          end
+function M.list()               print("[[LOVEWEB_NET]]list")                           end
+
+function M.send(verb, payload)
+  if payload then
+    print(string.format("[[LOVEWEB_NET]]send %s %s", verb, json.encode(payload)))
+  else
+    print("[[LOVEWEB_NET]]send " .. verb)
+  end
+end
+
+function M.setState(patch)
+  print("[[LOVEWEB_NET]]state " .. json.encode(patch))
+end
+
+-- Read all events past M.watermark, hand them to `onEvent(evt)`, advance
+-- the watermark. Call once per frame from love.update.
+function M.poll(onEvent)
+  -- Roster + room snapshots are cheap to re-read each tick; they're
+  -- updated on the runtime side only when something changes.
+  local roster = readJson("__loveweb__/net/roster.json")
+  if roster then M.members = roster.members or {} end
+  local room   = readJson("__loveweb__/net/room.json")
+  if room then
+    M.room   = M.room or {}
+    M.room.id           = room.roomId
+    M.room.stateVersion = room.stateVersion
+    M.state             = room.state or M.state
+  end
+  local status = readJson("__loveweb__/net/status.json")
+  if status and status.status then M.status = status.status end
+
+  if not love.filesystem.getInfo("__loveweb__/net/inbox.jsonl") then return end
+  for line in love.filesystem.lines("__loveweb__/net/inbox.jsonl") do
+    local ok, evt = pcall(json.decode, line)
+    if ok and type(evt) == "table" and evt.id and tonumber(evt.id) > tonumber(M.watermark) then
+      M.watermark = evt.id
+      if evt.verb == "state" and evt.payload and evt.payload.state then
+        M.state = evt.payload.state
+      end
+      if onEvent then onEvent(evt) end
+    end
+  end
+end
+
+return M
+```
+
+### End-to-end example
+
+```lua
+local Net  = require "net"
+local json = require "lib.json"
+
+function love.load()
+  Net.refreshIdentity()
+  -- Fire-and-forget. Result arrives a second later in last_result.json.
+  Net.create("Anglerfish Den")
+end
+
+function love.update(dt)
+  Net.poll(function (evt)
+    if     evt.verb == "join"   then chat("» " .. evt.handle .. " entered")
+    elseif evt.verb == "leave"  then chat("» " .. evt.handle .. " left")
+    elseif evt.verb == "move"   then world:applyRemoteMove(evt.userId, evt.payload)
+    elseif evt.verb == "shout"  then chat("<" .. evt.handle .. "> " .. evt.payload.text)
+    elseif evt.verb == "state"  then phase = evt.payload.state.phase end
+  end)
+end
+
+function love.keypressed(key)
+  if key == "space" then
+    Net.send("shout", { text = "ahoy!" })
+  end
+end
+
+function love.draw()
+  -- Render the live roster as a sidebar.
+  local y = 20
+  for _, m in ipairs(Net.members or {}) do
+    love.graphics.print(m.handle, 20, y); y = y + 18
+  end
+end
+```
+
+### Authority model
+
+- **Any current member** of a room can mutate `state` and broadcast
+  `send` events. The portal does not enforce a "host" by itself —
+  if you need authority, encode it in your own state schema (e.g.
+  `{owner_id, only_owner_writes}`) and reject conflicting events
+  on the receiving side.
+- **State updates** are atomic on the portal side: each PATCH increments
+  `state_version`. Pass the version you read (via the wrapper or with
+  the magic-print verb extended manually) and a stale write will be
+  rejected with a 409 in `last_result.json`. Default semantics is
+  last-write-wins.
+- **Capacity** is enforced server-side at join time. Default is 8 per
+  room, max 64. Pass `capacity` to `create` to change it.
+- **Visibility** is `public` (listed via `list`) or `unlisted` (joinable
+  by code only). Private/invite-only rooms are not in v1.
+- **Eviction** of stale members is implicit: if a player's heartbeat
+  lapses for more than 60 s, they fall out of the live roster. They're
+  not formally removed until they explicitly `leave`, so a momentary
+  network blip won't kick them out of the room.
+
+### What's still off-limits
+
+- **Raw sockets** (LuaSocket, TCP, UDP). The portal protocol above is
+  the only way to do online play.
+- **`love.thread`.** Use coroutines (`coroutine.create/resume/yield`).
+- **`love.video`.** Render a sprite sheet for cinematics instead.
 
 ---
 
@@ -844,6 +1104,18 @@ table.
 | `loveweb:achievements:state`   | `{ unlocks: [{ key, unlockedAt, points }], identity }`   | Current unlock state + LÖVE identity; parent writes the file at `<save-root>/<identity>/__loveweb__/achievements.json`. |
 | `loveweb:achievement:ack`      | `{ key, fresh, points }`                                 | Confirms an unlock landed server-side.                |
 | `loveweb:saves:list`           | `{ reqId, files: [{ path, updated_at, meta? }] }`        | Response to a `loveweb:save:list` request.            |
+| `loveweb:identity`             | `{ identity: { signedIn, userId?, handle?, avatar? } }`  | Player identity. Runtime writes to `__loveweb__/identity.json` before `love.load`. |
+| `loveweb:net:hello`            | `{ roomId, mode, state, stateVersion, at }`              | Room SSE handshake. Runtime writes `__loveweb__/net/room.json` and resets the inbox. |
+| `loveweb:net:event`            | `{ event: NetEvent }`                                    | Single delivered room event. Appended to `__loveweb__/net/inbox.jsonl`. |
+| `loveweb:net:roster`           | `{ roomId, members: NetRosterEntry[] }`                  | Live roster snapshot. Written to `__loveweb__/net/roster.json`. |
+| `loveweb:net:closed`           | `{ roomId }`                                             | Room subscription ended (left or evicted).            |
+| `loveweb:net:disconnected`     | `{ roomId }`                                             | SSE dropped; browser is reconnecting in the background. |
+| `loveweb:net:create:result`    | `{ reqId?, ok, room?, error? }`                          | Response to a `[[LOVEWEB_NET]]create`. Written to `__loveweb__/net/last_result.json`. |
+| `loveweb:net:join:result`      | `{ reqId?, ok, room?, error? }`                          | Response to a `[[LOVEWEB_NET]]join`. Written to `__loveweb__/net/last_result.json`. |
+| `loveweb:net:leave:result`     | `{ reqId?, ok }`                                         | Response to a `[[LOVEWEB_NET]]leave`.                 |
+| `loveweb:net:send:result`      | `{ reqId?, ok, event?, error? }`                         | Response to a `[[LOVEWEB_NET]]send`. Includes 429 rate-limit errors. |
+| `loveweb:net:state:result`     | `{ reqId?, ok, state?, version?, error? }`               | Response to a `[[LOVEWEB_NET]]state`. 409 on version conflict. |
+| `loveweb:net:list:result`      | `{ reqId?, rooms: RoomSummary[] }`                       | Response to a `[[LOVEWEB_NET]]list`.                  |
 
 ### Runtime iframe → parent (portal)
 
@@ -858,6 +1130,40 @@ table.
 | `loveweb:achievement:unlock`    | `{ key, meta }`                                         | Produced by the `[[LOVEWEB_ACH]]unlock` magic print.    |
 | `loveweb:fx`                    | `{ verb, args[] }`                                      | Produced by `[[LOVEWEB_FX]]<verb> <args...>` magic prints. Parent applies UI effects (flash, shake, mood, shatter, calm, pulsate, ripple, etc.). See **Runtime UI effects** above. |
 | `loveweb:quit`                  | `{ status, reason }`                                    | Clean-exit signal — emitted by the runtime shell when `love.event.quit()` flows through Module.quit / onExit. Parent overlays a "session ended" card and routes back to the library. |
+| `loveweb:net:create`            | `{ name?, visibility?, capacity?, state? }`             | Produced by `[[LOVEWEB_NET]]create <name>`. Parent calls `POST /api/net/rooms` and auto-joins. |
+| `loveweb:net:join`              | `{ code? \| roomId? }`                                  | Produced by `[[LOVEWEB_NET]]join <CODE>`. Parent calls `POST /api/net/rooms/join`. |
+| `loveweb:net:leave`             | `{}`                                                    | Produced by `[[LOVEWEB_NET]]leave`. Tears down SSE.     |
+| `loveweb:net:send`              | `{ verb, payload? }`                                    | Produced by `[[LOVEWEB_NET]]send <verb> <json>`. Broadcasts to room. |
+| `loveweb:net:state`             | `{ patch, expectedVersion?, replace? }`                 | Produced by `[[LOVEWEB_NET]]state <patch>`. Mutates persistent state. |
+| `loveweb:net:list`              | `{}`                                                    | Produced by `[[LOVEWEB_NET]]list`. Parent calls `GET /api/net/rooms`. |
+
+`NetEvent` shape:
+
+```ts
+{
+  id:      string,            // monotonic; tail by comparing to a watermark
+  roomId:  string,
+  userId:  string | null,     // null on portal-issued system events
+  handle:  string | null,
+  avatar:  string | null,
+  verb:    string,            // game-defined ('move', 'shout', 'attack', ...)
+                              // or reserved: 'join' | 'leave' | 'state'
+  payload: any,
+  ts:      number             // ms since epoch
+}
+```
+
+`NetRosterEntry` shape:
+
+```ts
+{
+  userId:   string,
+  handle:   string,
+  avatar:   string | null,
+  joinedAt: number,           // ms since epoch
+  lastSeen: number            // ms since epoch
+}
+```
 
 From Lua you interact with this protocol via:
 
@@ -866,6 +1172,11 @@ From Lua you interact with this protocol via:
   `loveweb:achievement:unlock`.
 - `love.filesystem.read("__loveweb__/achievements.json")` — reads
   state delivered via `loveweb:achievements:state`.
+- `print("[[LOVEWEB_NET]]<verb> <args>")` — emits
+  `loveweb:net:<verb>`. Responses + delivered events are mirrored
+  into files in `__loveweb__/net/` (see **Multiplayer & shared world**).
+- `love.filesystem.read("__loveweb__/identity.json")` — reads the
+  current player identity (handle, userId, avatar).
 
 ---
 

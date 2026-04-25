@@ -11,19 +11,49 @@
       { type: "loveweb:save:data",        reqId, dataB64 | null }
       { type: "loveweb:achievements:state", unlocks: [{key, unlockedAt, points}] }
       { type: "loveweb:achievement:ack",  key, fresh, points }
+      { type: "loveweb:identity",         identity: {signedIn, userId?, handle?, avatar?} }
+      { type: "loveweb:net:hello",        roomId, mode, state, stateVersion, at }
+      { type: "loveweb:net:event",        event: {id, roomId, userId, handle, avatar, verb, payload, ts} }
+      { type: "loveweb:net:roster",       roomId, members: [{userId, handle, avatar, joinedAt, lastSeen}] }
+      { type: "loveweb:net:closed",       roomId }
+      { type: "loveweb:net:disconnected", roomId }
+      { type: "loveweb:net:create:result", reqId?, ok, room?, error? }
+      { type: "loveweb:net:join:result",   reqId?, ok, room?, error? }
+      { type: "loveweb:net:leave:result",  reqId?, ok }
+      { type: "loveweb:net:send:result",   reqId?, ok, event?, error? }
+      { type: "loveweb:net:state:result",  reqId?, ok, state?, version?, error? }
+      { type: "loveweb:net:list:result",   reqId?, rooms: [...] }
     runtime → parent:
       { type: "loveweb:ready",            game }
       { type: "loveweb:save:write",       path, dataB64, meta }
       { type: "loveweb:save:read",        path, reqId }
       { type: "loveweb:log",              level, msg }
       { type: "loveweb:achievement:unlock", key, meta }
+      { type: "loveweb:net:list",         reqId? }
+      { type: "loveweb:net:create",       reqId?, name, visibility?, capacity?, state? }
+      { type: "loveweb:net:join",         reqId?, code? | roomId? }
+      { type: "loveweb:net:leave",        reqId? }
+      { type: "loveweb:net:send",         reqId?, verb, payload? }
+      { type: "loveweb:net:state",        reqId?, patch, expectedVersion?, replace? }
 
   Achievements magic-print protocol (Lua → runtime):
     Games call `print("[[LOVEWEB_ACH]]unlock <key>")` to unlock an
     achievement. The key must exist in the game's achievements.json.
     Optional JSON payload: `print("[[LOVEWEB_ACH]]unlock <key> {\"run\":7}")`.
     Unlocks are idempotent server-side.
+
+  Multi-user net magic-print protocol (Lua → runtime):
+    print("[[LOVEWEB_NET]]create <name>")           — create + join
+    print("[[LOVEWEB_NET]]join <CODE>")             — join by 6-char code
+    print("[[LOVEWEB_NET]]leave")                   — leave current room
+    print("[[LOVEWEB_NET]]send <verb> <jsonbody>")  — broadcast event
+    print("[[LOVEWEB_NET]]state <jsonpatch>")       — merge persistent state
+    print("[[LOVEWEB_NET]]list")                    — request room list
+    The runtime mirrors all responses + delivered events into files in
+    the save dir under `__loveweb__/net/` so the game side reads them via
+    love.filesystem.* without any JS interop.
 -->
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -85,11 +115,25 @@
     var achievementsPromise = new Promise(function (res) { achievementsResolve = res; });
     var loveIdentity = null; // set by parent via loveweb:achievements:state
 
+    // Player identity surfaced to the game via __loveweb__/identity.json.
+    // Resolved at preRun time (or earlier if the parent answers fast)
+    // so the game can read its own user info inside love.load().
+    var portalIdentityResolve;
+    var portalIdentityPromise = new Promise(function (res) { portalIdentityResolve = res; });
+
     // Reserved path (relative to the identity dir) for portal ↔ game
     // metadata that isn't part of the game's own save set. The
     // save-watch loop skips this subtree so it doesn't round-trip to
     // /api/saves.
     var LOVEWEB_META_DIR = "__loveweb__";
+
+    // Inbox file size cap. The runtime appends every delivered event
+    // here; when it crosses ~256 KB we trim to the last 75% of lines so
+    // the game can keep tailing without the file growing without bound.
+    // Game-side watermarking by event.id keeps replays from looking like
+    // duplicates after a trim.
+    var NET_INBOX_MAX_BYTES = 256 * 1024;
+    var NET_INBOX_KEEP_FRAC = 0.75;
 
     // Register the message listener BEFORE announcing our existence, so we
     // don't miss a fast reply.
@@ -123,7 +167,116 @@
         // exists mainly to surface in logs for debugging.
         log("info", "achievement ack " + d.key + (d.fresh ? " (fresh)" : " (replay)"));
       }
+      if (d.type === "loveweb:identity") {
+        portalIdentityResolve(d.identity || { signedIn: false });
+        // Hot-rewrite at runtime too, in case identity arrives after
+        // boot (e.g. user signs in mid-session via SPA navigation —
+        // doesn't currently happen but cheap to support).
+        try { writeMetaFile("identity.json", d.identity || { signedIn: false }); } catch (e) {}
+      }
+      if (d.type === "loveweb:net:hello") {
+        try {
+          writeMetaFile("net/room.json", {
+            roomId: d.roomId,
+            mode: d.mode,
+            state: d.state || {},
+            stateVersion: d.stateVersion || 0,
+            connectedAt: d.at || Date.now(),
+          });
+          writeMetaFile("net/status.json", { status: "connected", roomId: d.roomId, at: Date.now() });
+          // Reset inbox on (re)connect so the game can resync from the
+          // backfill events that follow without confusing them with
+          // stale entries from a prior session.
+          writeMetaFile("net/inbox.jsonl", "");
+        } catch (e) { log("warn", "net hello: " + e); }
+      }
+      if (d.type === "loveweb:net:event" && d.event) {
+        try { appendNetInbox(d.event); } catch (e) { log("warn", "net inbox: " + e); }
+      }
+      if (d.type === "loveweb:net:roster") {
+        try { writeMetaFile("net/roster.json", { roomId: d.roomId, members: d.members || [], at: Date.now() }); } catch (e) {}
+      }
+      if (d.type === "loveweb:net:closed") {
+        try {
+          writeMetaFile("net/status.json", { status: "closed", roomId: d.roomId, at: Date.now() });
+        } catch (e) {}
+      }
+      if (d.type === "loveweb:net:disconnected") {
+        try {
+          writeMetaFile("net/status.json", { status: "disconnected", roomId: d.roomId, at: Date.now() });
+        } catch (e) {}
+      }
+      if (
+        d.type === "loveweb:net:create:result" ||
+        d.type === "loveweb:net:join:result"   ||
+        d.type === "loveweb:net:leave:result"  ||
+        d.type === "loveweb:net:send:result"   ||
+        d.type === "loveweb:net:state:result"  ||
+        d.type === "loveweb:net:list:result"
+      ) {
+        try {
+          writeMetaFile("net/last_result.json", Object.assign({ at: Date.now() }, d));
+        } catch (e) {}
+      }
     });
+
+    // Helper: write a file under <SAVE_ROOT>/<identity>/__loveweb__/<rel>.
+    // Creates intermediate dirs and tolerates being called before the
+    // identity is known (queues a noop). `body` may be a string, a
+    // Uint8Array, or any JSON-serializable value (objects/arrays get
+    // JSON.stringify'd).
+    function writeMetaFile(rel, body) {
+      var FS = (window.Module && Module.FS) || null;
+      if (!FS || !loveIdentity) return false;
+      var base = SAVE_ROOT + "/" + loveIdentity + "/" + LOVEWEB_META_DIR;
+      var full = base + "/" + rel;
+      var dir = full.substring(0, full.lastIndexOf("/"));
+      try { FS.mkdirTree(dir); } catch (e) {}
+      var bytes;
+      if (body instanceof Uint8Array) {
+        bytes = body;
+      } else if (typeof body === "string") {
+        bytes = new TextEncoder().encode(body);
+      } else {
+        bytes = new TextEncoder().encode(JSON.stringify(body));
+      }
+      try { FS.writeFile(full, bytes); return true; } catch (e) { return false; }
+    }
+
+    // Append-only JSONL inbox for delivered net events. Trims the file
+    // to NET_INBOX_KEEP_FRAC of NET_INBOX_MAX_BYTES (line-aligned) when
+    // it grows past the cap so a long-lived session doesn't bloat MEMFS.
+    function appendNetInbox(evt) {
+      var FS = (window.Module && Module.FS) || null;
+      if (!FS || !loveIdentity) return;
+      var base = SAVE_ROOT + "/" + loveIdentity + "/" + LOVEWEB_META_DIR + "/net";
+      try { FS.mkdirTree(base); } catch (e) {}
+      var path = base + "/inbox.jsonl";
+      var line = JSON.stringify(evt) + "\n";
+      var existing = new Uint8Array(0);
+      try { existing = FS.readFile(path); } catch (e) {}
+      var combined;
+      if (existing && existing.length + line.length > NET_INBOX_MAX_BYTES) {
+        // Trim from the front, keeping the last NET_INBOX_KEEP_FRAC of
+        // the cap. Walk forward from a target offset to the next newline
+        // so we never split a JSON line.
+        var keep = Math.floor(NET_INBOX_MAX_BYTES * NET_INBOX_KEEP_FRAC);
+        var startAt = Math.max(0, existing.length - keep);
+        while (startAt < existing.length && existing[startAt] !== 0x0a) startAt++;
+        if (startAt < existing.length) startAt++;
+        var trimmed = existing.subarray(startAt);
+        var lineBytes = new TextEncoder().encode(line);
+        combined = new Uint8Array(trimmed.length + lineBytes.length);
+        combined.set(trimmed, 0);
+        combined.set(lineBytes, trimmed.length);
+      } else {
+        var addBytes = new TextEncoder().encode(line);
+        combined = new Uint8Array((existing ? existing.length : 0) + addBytes.length);
+        if (existing && existing.length) combined.set(existing, 0);
+        combined.set(addBytes, existing ? existing.length : 0);
+      }
+      try { FS.writeFile(path, combined); } catch (e) {}
+    }
     function requestRemoteRead(path) {
       const reqId = Math.random().toString(36).slice(2);
       return new Promise((res) => {
@@ -157,6 +310,7 @@
     // spam) or false if it should fall through to the normal log stream.
     var ACH_PREFIX = "[[LOVEWEB_ACH]]";
     var FX_PREFIX  = "[[LOVEWEB_FX]]";
+    var NET_PREFIX = "[[LOVEWEB_NET]]";
 
     function handleMagicLine(s) {
       if (typeof s !== "string") return false;
@@ -183,6 +337,64 @@
           return true;
         }
         log("warn", "unknown loveweb-ach verb: " + verb);
+        return true;
+      }
+
+      // Net layer ------------------------------------------------------
+      // Verbs:
+      //   create <name>                        — create + auto-join
+      //   join <CODE>                          — join existing room by 6-char code
+      //   leave                                — leave current room
+      //   send <verb> <jsonpayload>            — broadcast event to room
+      //   state <jsonpatch>                    — merge persistent state
+      //   list                                 — request public rooms (result lands in __loveweb__/net/last_result.json)
+      // Anything malformed is dropped here with a warn — the parent
+      // never sees it. The full validation happens server-side.
+      var ni = s.indexOf(NET_PREFIX);
+      if (ni >= 0) {
+        var nbody = s.slice(ni + NET_PREFIX.length).trim();
+        var nsp = nbody.indexOf(" ");
+        var nverb = nsp < 0 ? nbody : nbody.slice(0, nsp);
+        var ntail = nsp < 0 ? "" : nbody.slice(nsp + 1).trim();
+        try {
+          if (nverb === "create") {
+            parent.postMessage({ type: "loveweb:net:create", name: ntail || "untitled room" }, "*");
+          } else if (nverb === "join") {
+            parent.postMessage({ type: "loveweb:net:join", code: ntail.toUpperCase() }, "*");
+          } else if (nverb === "leave") {
+            parent.postMessage({ type: "loveweb:net:leave" }, "*");
+          } else if (nverb === "list") {
+            parent.postMessage({ type: "loveweb:net:list" }, "*");
+          } else if (nverb === "send") {
+            // "send <verb> <jsonpayload>". Payload is optional.
+            var sIdx = ntail.indexOf(" ");
+            var sVerb = sIdx < 0 ? ntail : ntail.slice(0, sIdx);
+            var sJson = sIdx < 0 ? "" : ntail.slice(sIdx + 1).trim();
+            if (!/^[a-z][a-z0-9_]*$/.test(sVerb || "")) {
+              log("warn", "[[LOVEWEB_NET]]send with bad verb: " + sVerb);
+              return true;
+            }
+            var sPayload = null;
+            if (sJson) {
+              try { sPayload = JSON.parse(sJson); }
+              catch (e) { log("warn", "[[LOVEWEB_NET]]send: invalid JSON payload"); return true; }
+            }
+            parent.postMessage({ type: "loveweb:net:send", verb: sVerb, payload: sPayload }, "*");
+          } else if (nverb === "state") {
+            var sPatch = null;
+            try { sPatch = JSON.parse(ntail); }
+            catch (e) { log("warn", "[[LOVEWEB_NET]]state: invalid JSON patch"); return true; }
+            if (!sPatch || typeof sPatch !== "object" || Array.isArray(sPatch)) {
+              log("warn", "[[LOVEWEB_NET]]state: patch must be a JSON object");
+              return true;
+            }
+            parent.postMessage({ type: "loveweb:net:state", patch: sPatch }, "*");
+          } else {
+            log("warn", "unknown loveweb-net verb: " + nverb);
+          }
+        } catch (e) {
+          log("warn", "loveweb-net handler: " + e);
+        }
         return true;
       }
 
@@ -281,6 +493,45 @@
         Module.setStatus(left ? ("preparing " + (this.totalDependencies-left) + "/" + this.totalDependencies) : "");
       },
       preRun: [
+        function preIdentity() {
+          // Write __loveweb__/identity.json before love.load() so games
+          // can branch on it from the very first frame. Re-uses the
+          // achievementsPromise to discover loveIdentity (set by the
+          // achievements:state message handler), since identity files
+          // also have to land inside the LÖVE identity dir.
+          Module.addRunDependency("loveweb-identity");
+          (async () => {
+            try {
+              const FS = Module.FS;
+              if (!FS) throw new Error("Module.FS not available");
+              const id = await Promise.race([
+                portalIdentityPromise,
+                new Promise((res) => setTimeout(function () { res({ signedIn: false }); }, 3000)),
+              ]);
+              // Wait briefly for loveIdentity too — the achievements
+              // message also carries it. If it never arrives we skip the
+              // injection; the runtime hot-rewrites identity.json once
+              // loveIdentity becomes known.
+              await Promise.race([
+                achievementsPromise,
+                new Promise((res) => setTimeout(res, 3000)),
+              ]);
+              if (!loveIdentity) {
+                log("warn", "identity injection: no LÖVE identity provided yet; deferring");
+                return;
+              }
+              const dir = SAVE_ROOT + "/" + loveIdentity + "/" + LOVEWEB_META_DIR;
+              try { FS.mkdirTree(dir); } catch (e) {}
+              const bytes = new TextEncoder().encode(JSON.stringify(id || { signedIn: false }));
+              FS.writeFile(dir + "/identity.json", bytes);
+              log("info", "identity injected at " + dir + "/identity.json");
+            } catch (e) {
+              log("warn", "identity injection: " + e);
+            } finally {
+              Module.removeRunDependency("loveweb-identity");
+            }
+          })();
+        },
         function preAchievements() {
           // Inject the current achievement state at a stable path inside
           // the LÖVE identity dir so the game can read it with

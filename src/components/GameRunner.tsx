@@ -16,9 +16,19 @@ type IncomingMsg =
   | { type: "loveweb:save:list"; reqId: string }
   | { type: "loveweb:log"; level: string; msg: string }
   | { type: "loveweb:achievement:unlock"; key: string; meta?: Record<string, unknown> | null }
-  | { type: "loveweb:quit"; status?: number; reason?: string | null };
+  | { type: "loveweb:quit"; status?: number; reason?: string | null }
+  // Multi-user net layer.
+  | { type: "loveweb:net:list"; reqId?: string }
+  | { type: "loveweb:net:create"; reqId?: string; name?: string; visibility?: "public" | "unlisted"; capacity?: number; state?: Record<string, unknown> }
+  | { type: "loveweb:net:join"; reqId?: string; code?: string; roomId?: string }
+  | { type: "loveweb:net:leave"; reqId?: string }
+  | { type: "loveweb:net:send"; reqId?: string; verb: string; payload?: unknown }
+  | { type: "loveweb:net:state"; reqId?: string; patch: Record<string, unknown>; expectedVersion?: number; replace?: boolean };
 
 type UnlockEntry = { key: string; unlockedAt: string; points: number };
+
+type NetRosterEntry = { userId: string; handle: string; avatar: string | null; joinedAt: number; lastSeen: number };
+type NetIdentity = { signedIn: boolean; userId?: string; handle?: string; avatar?: string | null };
 
 // Embeds the love.js runtime in a sandboxed iframe and brokers save
 // operations between it and /api/saves. Graceful fallback UI when the
@@ -43,6 +53,13 @@ export default function GameRunner({
   const gameMeta = getGame(slug);
   const accent = gameMeta?.accentColor ?? "#8a4fff";
   const identity = gameMeta ? gameIdentity(gameMeta) : slug.replace(/-/g, "_");
+
+  // Multi-user net layer. The portal owns the EventSource subscription
+  // and forwards delivered events into the iframe. The game side never
+  // sees /api/* directly — same trust model as save sync.
+  const currentRoomIdRef = useRef<string | null>(null);
+  const netEventSourceRef = useRef<EventSource | null>(null);
+  const netHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const dismissToast = useCallback((id: string) => {
     setToasts((cur) => cur.filter((t) => t.id !== id));
@@ -211,10 +228,11 @@ export default function GameRunner({
   }, [runtimePath]);
 
   // Extracted so both `loveweb:hello` and the iframe's `onLoad` can use it.
-  // Pushes the manifest + auth state + achievement state to the runtime,
-  // triggering save prepopulation and achievement-state injection into the
-  // game's save dir. Safe to call more than once per iframe lifetime — the
-  // runtime resolves its manifest/achievements promises at most once.
+  // Pushes the manifest + auth state + achievement state + identity to the
+  // runtime, triggering save prepopulation and metadata-file injection
+  // into the game's save dir. Safe to call more than once per iframe
+  // lifetime — the runtime resolves its manifest/achievements/identity
+  // promises at most once.
   const pushManifest = async () => {
     const iframe = iframeRef.current;
     if (!iframe || !iframe.contentWindow) return;
@@ -240,8 +258,104 @@ export default function GameRunner({
     } catch {
       reply({ type: "loveweb:achievements:state", unlocks: [], identity });
     }
+    // Identity: who is the player? Tells the runtime to write
+    // __loveweb__/identity.json so multi-user games can label local
+    // events without re-asking the player for a name. The endpoint returns
+    // {signedIn:false} for anonymous sessions; the runtime writes the
+    // file regardless so games can branch on `payload.signedIn`.
+    try {
+      const r = await fetch("/api/net/identity");
+      const j: NetIdentity = r.ok ? await r.json() : { signedIn: false };
+      reply({ type: "loveweb:identity", identity: j });
+    } catch {
+      reply({ type: "loveweb:identity", identity: { signedIn: false } });
+    }
     reply({ type: "loveweb:auth", signedIn });
   };
+
+  // ---- net helpers --------------------------------------------------
+  const netReply = (msg: unknown) => {
+    iframeRef.current?.contentWindow?.postMessage(msg, "*");
+  };
+
+  // Tear down any active room subscription. Idempotent — safe to call
+  // before joining a new room or on iframe unmount.
+  const closeNetSubscription = () => {
+    if (netEventSourceRef.current) {
+      try { netEventSourceRef.current.close(); } catch {}
+      netEventSourceRef.current = null;
+    }
+    if (netHeartbeatRef.current) {
+      clearInterval(netHeartbeatRef.current);
+      netHeartbeatRef.current = null;
+    }
+    currentRoomIdRef.current = null;
+  };
+
+  const openNetSubscription = (roomId: string) => {
+    closeNetSubscription();
+    currentRoomIdRef.current = roomId;
+    const es = new EventSource(`/api/net/rooms/stream?roomId=${encodeURIComponent(roomId)}`);
+    netEventSourceRef.current = es;
+    es.addEventListener("hello", (evt) => {
+      try {
+        const j = JSON.parse((evt as MessageEvent).data);
+        netReply({ type: "loveweb:net:hello", roomId, ...j });
+      } catch {}
+    });
+    es.addEventListener("net", (evt) => {
+      try {
+        const j = JSON.parse((evt as MessageEvent).data);
+        netReply({ type: "loveweb:net:event", event: j });
+      } catch {}
+    });
+    es.addEventListener("roster", (evt) => {
+      try {
+        const j = JSON.parse((evt as MessageEvent).data) as NetRosterEntry[];
+        netReply({ type: "loveweb:net:roster", roomId, members: j });
+      } catch {}
+    });
+    es.addEventListener("closed", () => {
+      netReply({ type: "loveweb:net:closed", roomId });
+      closeNetSubscription();
+    });
+    es.onerror = () => {
+      // Browser auto-reconnects EventSource by default. Surface the
+      // dropped state to the game once so any "uplink lost" UI it shows
+      // can clear when delivery resumes.
+      netReply({ type: "loveweb:net:disconnected", roomId });
+    };
+    netHeartbeatRef.current = setInterval(() => {
+      const id = currentRoomIdRef.current;
+      if (!id) return;
+      fetch("/api/net/rooms/heartbeat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomId: id }),
+        keepalive: true,
+      }).catch(() => {});
+    }, 15000);
+  };
+
+  // Cleanup on unmount: leave the room (best-effort) and tear down the
+  // SSE / heartbeat. The leave call is `keepalive: true` so it has a
+  // chance to flush even when the user is navigating away.
+  useEffect(() => {
+    return () => {
+      const id = currentRoomIdRef.current;
+      if (id && signedIn) {
+        try {
+          fetch("/api/net/rooms/leave", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ roomId: id }),
+            keepalive: true,
+          }).catch(() => {});
+        } catch {}
+      }
+      closeNetSubscription();
+    };
+  }, [signedIn]);
 
   // postMessage bridge
   useEffect(() => {
@@ -303,6 +417,104 @@ export default function GameRunner({
           setExited({ reason: data.reason ?? null, status: data.status });
           try { sound.confirm(); } catch {}
           setTimeout(() => { router.push("/"); }, 1400);
+        } else if (data.type === "loveweb:net:list") {
+          const r = await fetch(`/api/net/rooms?game=${encodeURIComponent(slug)}`);
+          const j = r.ok ? await r.json() : { rooms: [] };
+          reply({ type: "loveweb:net:list:result", reqId: data.reqId, rooms: j.rooms ?? [] });
+        } else if (data.type === "loveweb:net:create") {
+          if (!signedIn) {
+            reply({ type: "loveweb:net:create:result", reqId: data.reqId, ok: false, error: "not signed in" });
+            return;
+          }
+          const r = await fetch("/api/net/rooms", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              game: slug,
+              name: data.name ?? "untitled room",
+              visibility: data.visibility ?? "public",
+              capacity: data.capacity ?? 8,
+              state: data.state,
+            }),
+          });
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            reply({ type: "loveweb:net:create:result", reqId: data.reqId, ok: false, error: j?.error || `http ${r.status}` });
+            return;
+          }
+          const j = await r.json();
+          openNetSubscription(j.room.id);
+          reply({ type: "loveweb:net:create:result", reqId: data.reqId, ok: true, room: j.room });
+        } else if (data.type === "loveweb:net:join") {
+          if (!signedIn) {
+            reply({ type: "loveweb:net:join:result", reqId: data.reqId, ok: false, error: "not signed in" });
+            return;
+          }
+          const r = await fetch("/api/net/rooms/join", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game: slug, code: data.code, roomId: data.roomId }),
+          });
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            reply({ type: "loveweb:net:join:result", reqId: data.reqId, ok: false, error: j?.error || `http ${r.status}` });
+            return;
+          }
+          const j = await r.json();
+          openNetSubscription(j.room.id);
+          reply({ type: "loveweb:net:join:result", reqId: data.reqId, ok: true, room: j.room });
+        } else if (data.type === "loveweb:net:leave") {
+          const id = currentRoomIdRef.current;
+          if (id && signedIn) {
+            await fetch("/api/net/rooms/leave", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ roomId: id }),
+            }).catch(() => {});
+          }
+          closeNetSubscription();
+          reply({ type: "loveweb:net:leave:result", reqId: data.reqId, ok: true });
+        } else if (data.type === "loveweb:net:send") {
+          const id = currentRoomIdRef.current;
+          if (!id) {
+            reply({ type: "loveweb:net:send:result", reqId: data.reqId, ok: false, error: "not in room" });
+            return;
+          }
+          const r = await fetch("/api/net/rooms/send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ roomId: id, verb: data.verb, payload: data.payload ?? {} }),
+          });
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            reply({ type: "loveweb:net:send:result", reqId: data.reqId, ok: false, error: j?.error || `http ${r.status}` });
+            return;
+          }
+          const j = await r.json();
+          reply({ type: "loveweb:net:send:result", reqId: data.reqId, ok: true, event: j.event });
+        } else if (data.type === "loveweb:net:state") {
+          const id = currentRoomIdRef.current;
+          if (!id) {
+            reply({ type: "loveweb:net:state:result", reqId: data.reqId, ok: false, error: "not in room" });
+            return;
+          }
+          const r = await fetch("/api/net/rooms/state", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              roomId: id,
+              patch: data.patch ?? {},
+              expectedVersion: data.expectedVersion,
+              replace: data.replace,
+            }),
+          });
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            reply({ type: "loveweb:net:state:result", reqId: data.reqId, ok: false, error: j?.error || `http ${r.status}` });
+            return;
+          }
+          const j = await r.json();
+          reply({ type: "loveweb:net:state:result", reqId: data.reqId, ok: true, state: j.state, version: j.version });
         } else if (data.type === "loveweb:achievement:unlock") {
           if (!signedIn) return;
           const r = await fetch(`/api/achievements/unlock`, {

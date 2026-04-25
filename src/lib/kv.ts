@@ -29,3 +29,38 @@ export type ChatMsg = {
   ts: number;
   kind?: "chat" | "system" | "join" | "leave";
 };
+
+// Net (multiplayer rooms) KV layout. We keep two parallel pairs per room:
+//   stream:<seq, list>    event log fanout
+//   roster:<seq, list>    membership delta fanout
+// Each pair lets the SSE stream do one mget across all interesting keys
+// per poll instead of one read per channel — same trick as chat.
+export const NET_KV = {
+  streamSeq: (roomId: number | string) => `net:room:${roomId}:stream:seq`,
+  streamList: (roomId: number | string) => `net:room:${roomId}:stream`,
+  rosterSeq: (roomId: number | string) => `net:room:${roomId}:roster:seq`,
+  rosterList: (roomId: number | string) => `net:room:${roomId}:roster`,
+  // Token bucket used by /api/net/rooms/send to soft-rate-limit chatty
+  // games. One key per (user, room); refilled on read at SEND_RATE/sec.
+  sendBucket: (userId: number | string, roomId: number | string) =>
+    `net:rl:send:${userId}:${roomId}`,
+} as const;
+
+export type NetEvent = {
+  id: string;          // monotonic, opaque to game side
+  roomId: string;
+  userId: string | null;
+  handle: string | null;
+  avatar: string | null;
+  verb: string;
+  payload: unknown;
+  ts: number;
+};
+
+export type NetRosterEntry = {
+  userId: string;
+  handle: string;
+  avatar: string | null;
+  joinedAt: number;
+  lastSeen: number;
+};
