@@ -196,41 +196,87 @@ export default function ChatDrawer({
   const visible = messages.filter((m) => m.channel === channel);
 
   return (
-    <aside
-      id="chat"
-      // Translucent enough for the BackgroundFX starfield (mounted at the
-      // root layout, z-0) to drift through the drawer — a thin 1px blur
-      // softens the particles without smearing them into mud, and a
-      // subtle linear gradient deepens the top/bottom edges so the chat
-      // chrome still has some weight against the motion behind it.
-      className={`fixed right-0 top-14 z-30 flex h-[calc(100vh-3.5rem)] flex-col border-l border-eldritch-deep/60 bg-gradient-to-b from-void-0/65 via-void-0/55 to-void-0/65 backdrop-blur-md transition-all ${
-        open ? "w-[min(380px,92vw)]" : "w-10"
-      }`}
-    >
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex h-10 w-full items-center justify-between border-b border-eldritch-deep/60 px-3 text-[0.65rem] uppercase tracking-[0.3em] text-bone/70 hover:text-abyss-cyan"
-        title={open ? "collapse chat" : "expand chat"}
-      >
-        {open ? (
-          <>
-            <span>
-              <span
-                className={`mr-2 inline-block h-1.5 w-1.5 rounded-full ${
-                  connected ? "bg-matrix-green shadow-[0_0_8px_#33ff66] animate-pulse" : "bg-blood-red"
-                }`}
-              />
-              signal ▸ <span className={connected ? "text-matrix-green" : "text-blood-red"}>{connected ? "linked" : "scanning"}</span>
-            </span>
-            <span className="text-eldritch-purple">⟨</span>
-          </>
-        ) : (
-          <span className="rotate-180 [writing-mode:vertical-rl]">chat ▸</span>
-        )}
-      </button>
+    <>
+      {/* Mobile FAB — visible only on small screens when the sheet is
+          closed, so the chat never reserves space against the right
+          edge of the page. Tap to slide the sheet up. The unread dot
+          here would be a nice add later; for now it's just a static
+          chat glyph. */}
+      {!open && (
+        <button
+          onClick={() => setOpen(true)}
+          aria-label="Open chat"
+          className="md:hidden fixed bottom-4 right-4 z-30 inline-flex items-center gap-2 px-3.5 py-2.5 text-[0.65rem] uppercase tracking-[0.22em] font-mono text-bone/85 bg-void-0/85 border border-eldritch-purple/70 backdrop-blur-md rounded-full shadow-[0_0_18px_rgba(138,79,255,0.35)] hover:text-abyss-cyan hover:border-abyss-cyan/70 active:scale-95 transition"
+          style={{ paddingBottom: `calc(0.625rem + env(safe-area-inset-bottom, 0px))` }}
+        >
+          <span aria-hidden>▤</span>
+          <span>chat</span>
+          <span
+            className={`inline-block h-1.5 w-1.5 rounded-full ${
+              connected ? "bg-matrix-green shadow-[0_0_8px_#33ff66]" : "bg-bone/40"
+            }`}
+          />
+        </button>
+      )}
 
+      {/* Mobile backdrop — tap-to-close. Only renders when sheet is up
+          on a touch-class screen. */}
       {open && (
-        <>
+        <div
+          className="md:hidden fixed inset-0 z-20 bg-void-0/55 backdrop-blur-[2px]"
+          onClick={() => setOpen(false)}
+          aria-hidden
+        />
+      )}
+
+      <aside
+        id="chat"
+        // Two layouts in one element, switched by media-query utilities:
+        //   • md+ : fixed right rail anchored under the topbar, 380px
+        //           expanded / 40px collapsed (existing desktop UX).
+        //   • <md : bottom sheet that slides up from the bottom, full
+        //           width, ~78svh tall, with rounded top corners and a
+        //           safe-area-aware bottom inset for the input bar.
+        // Translucent + blur so the BackgroundFX starfield drifts
+        // through; the gradient deepens edges for legibility.
+        className={`fixed z-30 flex flex-col border-eldritch-deep/60 bg-gradient-to-b from-void-0/85 via-void-0/75 to-void-0/85 backdrop-blur-md transition-all
+          md:right-0 md:top-14 md:h-[calc(100svh-3.5rem)] md:border-l md:bottom-auto md:left-auto md:rounded-none
+          ${
+            open
+              ? // open
+                "left-0 right-0 bottom-0 h-[78svh] border-t rounded-t-2xl md:left-auto md:right-0 md:top-14 md:bottom-auto md:h-[calc(100svh-3.5rem)] md:rounded-none md:border-t-0 md:w-[min(380px,92vw)]"
+              : // closed (md+ collapsed rail; <md hidden — FAB above
+                // takes its place)
+                "hidden md:flex md:w-10"
+          }`}
+      >
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex h-10 w-full items-center justify-between border-b border-eldritch-deep/60 px-3 text-[0.65rem] uppercase tracking-[0.3em] text-bone/70 hover:text-abyss-cyan"
+          title={open ? "collapse chat" : "expand chat"}
+        >
+          {open ? (
+            <>
+              <span>
+                <span
+                  className={`mr-2 inline-block h-1.5 w-1.5 rounded-full ${
+                    connected ? "bg-matrix-green shadow-[0_0_8px_#33ff66] animate-pulse" : "bg-blood-red"
+                  }`}
+                />
+                signal ▸ <span className={connected ? "text-matrix-green" : "text-blood-red"}>{connected ? "linked" : "scanning"}</span>
+              </span>
+              {/* Mobile: explicit × close. Desktop: the existing
+                  collapse glyph. */}
+              <span className="md:hidden text-bone/70 text-base leading-none">×</span>
+              <span className="hidden md:inline text-eldritch-purple">⟨</span>
+            </>
+          ) : (
+            <span className="rotate-180 [writing-mode:vertical-rl]">chat ▸</span>
+          )}
+        </button>
+
+        {open && (
+          <>
           <div className="flex items-center gap-1 border-b border-eldritch-deep/40 px-3 py-2">
             {channels.map((c) => (
               <button
@@ -278,7 +324,10 @@ export default function ChatDrawer({
             )}
           </div>
 
-          <div className="border-t border-eldritch-deep/60 p-3">
+          <div
+            className="border-t border-eldritch-deep/60 p-3"
+            style={{ paddingBottom: `calc(0.75rem + env(safe-area-inset-bottom, 0px))` }}
+          >
             {signedIn ? (
               <form
                 onSubmit={(e) => {
@@ -311,7 +360,8 @@ export default function ChatDrawer({
           </div>
         </>
       )}
-    </aside>
+      </aside>
+    </>
   );
 }
 
