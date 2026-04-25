@@ -65,6 +65,25 @@ export const GAMES: GameEntry[] = [
     multiplayer: "single",
     status: "live",
   },
+  {
+    slug: "zmine",
+    title: "ZMINE — Zepton Mining",
+    codename: "ZMINE",
+    tagline: "Glowing-green proof-of-work tycoon — mine zeptons, balance the grid.",
+    description:
+      "A real-physics proof-of-work tycoon. Deploy ASIC hashboards, GPU clusters, cryogenic quantum rigs, and exotic neural forges to mine zeptons — but every miner consumes power. Build the grid that feeds them: solar, wind, hydro, geothermal, fission, fusion, antimatter, zero-point. Climb the tech tree, ride the halvings, and light up the void.",
+    author: "MBrassey",
+    version: "head",
+    category: "puzzle",
+    tags: ["tycoon", "idle", "proof-of-work", "energy", "neon"],
+    year: 2026,
+    repo: "MBrassey/zmine",
+    ref: "main",
+    identity: "zmine",                // matches the game's conf.lua t.identity
+    accentColor: "#3eff8b",
+    multiplayer: "single",
+    status: "live",
+  },
 ];
 
 export function getGame(slug: string): GameEntry | undefined {

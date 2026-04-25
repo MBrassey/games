@@ -33,6 +33,7 @@ jobs:
       matrix:
         repo:
           - ThePearlKing/claude-mythos-game
+          - MBrassey/zmine
         branch:
           - main
     permissions:
