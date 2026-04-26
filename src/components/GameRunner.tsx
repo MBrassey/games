@@ -71,6 +71,13 @@ export default function GameRunner({
   // join any room.
   const slugEventSourceRef = useRef<EventSource | null>(null);
 
+  // Floating top-right "↩ exit" handle visibility. Default driven by the
+  // game's GameEntry; runtime can override it by emitting
+  // `print("[[LOVEWEB_FX]]hide_exit_handle")` (or `show_exit_handle`).
+  const [exitHandleVisible, setExitHandleVisible] = useState<boolean>(
+    !(gameMeta?.hideExitHandle === true)
+  );
+
   const dismissToast = useCallback((id: string) => {
     setToasts((cur) => cur.filter((t) => t.id !== id));
   }, []);
@@ -465,6 +472,18 @@ export default function GameRunner({
           setExited({ reason: data.reason ?? null, status: data.status });
           try { sound.confirm(); } catch {}
           setTimeout(() => { router.push("/"); }, 1400);
+        } else if (
+          (data as { type?: string }).type === "loveweb:fx"
+        ) {
+          // FX dispatch is mostly handled by UiEffects (overlay flashes
+          // / shake / mood / etc). One verb is GameRunner-local:
+          // `hide_exit_handle` / `show_exit_handle`, which toggles the
+          // floating top-right ↩ pill above the iframe. The bottom-bar
+          // exit button stays — that's the always-available stranded-
+          // player escape hatch.
+          const fx = data as unknown as { verb?: string };
+          if (fx.verb === "hide_exit_handle") setExitHandleVisible(false);
+          else if (fx.verb === "show_exit_handle") setExitHandleVisible(true);
         } else if (data.type === "loveweb:net:list") {
           const r = await fetch(`/api/net/rooms?game=${encodeURIComponent(slug)}`);
           const j = r.ok ? await r.json() : { rooms: [] };
@@ -801,16 +820,23 @@ pnpm build:claude-mythos
             opacity until hovered so it doesn't distract during play.
             Always pointer-events-auto — the whole point is that it
             remains clickable even if the game has locked up, so the
-            player is never stranded. */}
-        <Link
-          href="/"
-          data-sfx="confirm"
-          title="exit to library"
-          className="absolute top-2 right-2 z-20 inline-flex items-center gap-1.5 px-2 py-1 text-[0.58rem] uppercase tracking-[0.22em] font-mono text-bone/55 bg-void-0/70 border border-eldritch-deep/60 hover:text-abyss-cyan hover:border-abyss-cyan/70 hover:bg-void-0/90 hover:shadow-[0_0_10px_#66e0ff55] transition-colors"
-        >
-          <span aria-hidden="true">↩</span>
-          <span>exit</span>
-        </Link>
+            player is never stranded. Games can opt out via the
+            GameEntry `hideExitHandle` flag, or toggle it at runtime
+            with `print("[[LOVEWEB_FX]]hide_exit_handle")` /
+            `print("[[LOVEWEB_FX]]show_exit_handle")`. The status-bar
+            "exit game" button below the frame is unaffected — that's
+            the always-on escape hatch. */}
+        {exitHandleVisible && (
+          <Link
+            href="/"
+            data-sfx="confirm"
+            title="exit to library"
+            className="absolute top-2 right-2 z-20 inline-flex items-center gap-1.5 px-2 py-1 text-[0.58rem] uppercase tracking-[0.22em] font-mono text-bone/55 bg-void-0/70 border border-eldritch-deep/60 hover:text-abyss-cyan hover:border-abyss-cyan/70 hover:bg-void-0/90 hover:shadow-[0_0_10px_#66e0ff55] transition-colors"
+          >
+            <span aria-hidden="true">↩</span>
+            <span>exit</span>
+          </Link>
+        )}
         {/* Mobile touch overlay. No-op on desktop. The component itself
             checks `pointer:coarse` and the per-game `controls` config
             to decide what (if anything) to render. Synthesizes
