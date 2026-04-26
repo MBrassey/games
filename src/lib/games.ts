@@ -62,20 +62,20 @@ export const GAMES: GameEntry[] = [
   {
     slug: "zmine",
     title: "ZMINE — Zepton Mining",
-    codename: "ZMINE",
-    tagline: "Glowing-green proof-of-work tycoon — mine zeptons, balance the grid.",
+    codename: "ZMINE.OPS",
+    tagline: "mine zeptons. power the grid. light up the void.",
     description:
-      "A real-physics proof-of-work tycoon. Deploy ASIC hashboards, GPU clusters, cryogenic quantum rigs, and exotic neural forges to mine zeptons — but every miner consumes power. Build the grid that feeds them: solar, wind, hydro, geothermal, fission, fusion, antimatter, zero-point. Climb the tech tree, ride the halvings, and light up the void.",
-    author: "MBrassey",
+      "A glowing-green proof-of-work tycoon with a walkable Roblox-style world, real cross-player presence on the A-TEK Mesh, layered procedural audio, and a full ladder of cosmetic unlocks. Click the orb, build hashboards and reactors, balance your grid against brownout, ride global surge events, and find blocks across a 100-block halving cycle.",
+    author: "mbrassey",
     version: "head",
-    category: "puzzle",
-    tags: ["tycoon", "idle", "proof-of-work", "energy", "neon"],
+    category: "meta",
+    tags: ["tycoon", "clicker", "mmo", "crypto"],
     year: 2026,
     repo: "MBrassey/zmine",
     ref: "main",
     identity: "zmine",                // matches the game's conf.lua t.identity
-    accentColor: "#3eff8b",
-    multiplayer: "single",
+    accentColor: "#33ff88",
+    multiplayer: "mmo",
     status: "live",
     // Tycoon UI is mouse/tap-driven; raw browser touches already reach
     // love.js. Skip the joystick overlay.
