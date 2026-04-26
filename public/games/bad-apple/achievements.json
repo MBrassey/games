@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "achievements": [
+    { "key": "first_blood",     "title": "First Blood",        "description": "Take your first hit. Welcome to dodge club.",                                       "glyph": "*", "points": 5,   "rarity": "common"     },
+    { "key": "first_dash",      "title": "Quickstep",          "description": "Use the dash for the first time.",                                                  "glyph": ">", "points": 5,   "rarity": "common"     },
+    { "key": "intro_clear",     "title": "Past the Hush",      "description": "Survive the first 30 seconds.",                                                     "glyph": ".", "points": 10,  "rarity": "common"     },
+    { "key": "halfway",         "title": "Halfway House",      "description": "Survive past 1:50.",                                                                "glyph": "/", "points": 15,  "rarity": "uncommon"   },
+    { "key": "chorus_survivor", "title": "Through the Chorus", "description": "Survive past 2:30.",                                                                "glyph": "^", "points": 20,  "rarity": "uncommon"   },
+    { "key": "apple_complete",  "title": "Apple Consumed",     "description": "Reach the end of the song.",                                                        "glyph": "@", "points": 50,  "rarity": "rare"       },
+    { "key": "untouched",       "title": "Untouched",          "description": "Finish the song without taking a single hit.",                                      "glyph": "+", "points": 200, "rarity": "legendary"  },
+    { "key": "pacifist",        "title": "Pacifist Runner",    "description": "Finish the song without using dash.",                                               "glyph": "~", "points": 150, "rarity": "legendary"  },
+    { "key": "dasher",          "title": "Dash Hand",          "description": "Use dash 100 times in a single run.",                                               "glyph": "%", "points": 25,  "rarity": "uncommon"   },
+    { "key": "close_call",      "title": "Close Call",         "description": "Dash through a bullet's hot zone (i-frame save).",                                  "glyph": "!", "points": 15,  "rarity": "uncommon"   },
+    { "key": "unbroken",        "title": "Unbroken Combo",     "description": "Dodge 30 obstacles in a row without taking damage.",                                "glyph": "#", "points": 30,  "rarity": "rare"       },
+    { "key": "second_chance",   "title": "It's NOT Over",      "description": "Use the auto-revive to keep going after a death.",                                  "glyph": "?", "points": 10,  "rarity": "common"     },
+    { "key": "flawless_intro",  "title": "Clean Open",         "description": "Reach 0:30 without taking any damage.",                                             "glyph": "-", "points": 20,  "rarity": "uncommon"   },
+    { "key": "lobby_visitor",   "title": "Not Alone",          "description": "Play with at least one other ghost in the lobby.",                                  "glyph": "&", "points": 15,  "rarity": "uncommon"   },
+    { "key": "loop_lover",      "title": "Loop Lover",         "description": "Finish the song twice in one session with replay enabled.",                         "glyph": "$", "points": 50,  "rarity": "rare"       }
+  ]
+}

@@ -69,6 +69,34 @@ export function lovePath(slug: string): string {
 // new entries here to keep "latest at the top-left."
 export const GAMES: GameEntry[] = [
   {
+    slug: "bad-apple",
+    title: "Bad Apple // Beat Dash",
+    codename: "BAD.APPLE",
+    tagline: "dodge the silhouette. on every beat. every kick. every snare.",
+    description:
+      "A bullet-hell dodge game played on top of the original Bad Apple shadow-art video. The silhouette is both your backdrop and your obstacle — any pixel of it dealing contact damage. Bullets, beams, rings, spinners, and chasers spawn on real beat / kick / snare / hat events extracted directly from the audio. Dash with i-frames, ride the difficulty ramp through verse/build/chorus/climax, and ghost-share the lobby with other operators on the A-TEK Mesh.",
+    author: "mbrassey",
+    version: "head",
+    category: "action",
+    tags: ["bullet-hell", "rhythm", "dodge", "music"],
+    year: 2026,
+    repo: "MBrassey/bad-apple",
+    ref: "main",
+    // conf.lua sets t.identity = "bad_apple", which matches the default
+    // derivation slug.replaceAll("-", "_") — explicit anyway for clarity.
+    identity: "bad_apple",
+    accentColor: "#f0f0f0",
+    multiplayer: "mmo",
+    status: "live",
+    controls: {
+      mode: "movement",
+      actions: [
+        { code: "Space",     label: "✦" },
+        { code: "ShiftLeft", label: "⇧" },
+      ],
+    },
+  },
+  {
     slug: "zmine",
     title: "ZMINE — Zepton Mining",
     codename: "ZMINE.OPS",
