@@ -171,8 +171,60 @@
         portalIdentityResolve(d.identity || { signedIn: false });
         // Hot-rewrite at runtime too, in case identity arrives after
         // boot (e.g. user signs in mid-session via SPA navigation —
-        // doesn't currently happen but cheap to support).
+        // doesn't currently happen but cheap to support). Mirror to
+        // both legacy `identity.json` and new `net/identity.json`
+        // (the canonical location going forward; games new and old
+        // can pick whichever path they prefer).
         try { writeMetaFile("identity.json", d.identity || { signedIn: false }); } catch (e) {}
+        try { writeMetaFile("net/identity.json", d.identity || { signedIn: false }); } catch (e) {}
+      }
+      // Slug-wide channel — opens for the whole game-page lifetime, no
+      // auth required. The runtime mirrors all three message types into
+      // files in __loveweb__/slug/ so games can tail them without any
+      // JS interop.
+      if (d.type === "loveweb:net:slug_hello") {
+        try {
+          writeMetaFile("slug/hello.json", { slug: d.slug, mode: d.mode, at: d.at });
+          // Reset the global inbox on (re)connect so backfill doesn't
+          // confuse the game with stale entries.
+          writeMetaFile("slug/global_inbox.jsonl", "");
+        } catch (e) { log("warn", "slug hello: " + e); }
+      }
+      if (d.type === "loveweb:net:slug_event" && d.event) {
+        try { appendSlugInbox(d.event); } catch (e) { log("warn", "slug inbox: " + e); }
+        // If the slug event is a slug_state mutation, also mirror the
+        // new state snapshot into __loveweb__/slug/state.json so games
+        // that just want the latest blob don't have to parse the inbox.
+        if (d.event.verb === "slug_state" && d.event.payload) {
+          try { writeMetaFile("slug/state.json", d.event.payload); } catch (e) {}
+        }
+      }
+      if (d.type === "loveweb:net:slug_presence" && d.presence) {
+        try { writeMetaFile("slug/active.json", d.presence); } catch (e) {}
+      }
+      if (d.type === "loveweb:net:slug_state:result" && d.ok && d.state != null) {
+        try { writeMetaFile("slug/state.json", { state: d.state, version: d.version }); } catch (e) {}
+      }
+      if (d.type === "loveweb:net:profile:result" && d.ok && d.userId) {
+        try { writeMetaFile("profiles/" + String(d.userId) + ".json", {
+          userId: d.userId,
+          handle: d.handle || null,
+          avatar: d.avatar || null,
+          profile: d.profile || null,
+          profileUpdatedAt: d.profileUpdatedAt || null,
+          fetchedAt: Date.now(),
+        }); } catch (e) {}
+      }
+      if (d.type === "loveweb:net:slug_presence:result" && d.ok && d.presence) {
+        try { writeMetaFile("slug/active.json", d.presence); } catch (e) {}
+      }
+      if (
+        d.type === "loveweb:net:broadcast:result" ||
+        d.type === "loveweb:net:slug_state:result" ||
+        d.type === "loveweb:net:profile:result"   ||
+        d.type === "loveweb:net:slug_presence:result"
+      ) {
+        try { writeMetaFile("net/last_result.json", Object.assign({ at: Date.now() }, d)); } catch (e) {}
       }
       if (d.type === "loveweb:net:hello") {
         try {
@@ -247,19 +299,23 @@
     // to NET_INBOX_KEEP_FRAC of NET_INBOX_MAX_BYTES (line-aligned) when
     // it grows past the cap so a long-lived session doesn't bloat MEMFS.
     function appendNetInbox(evt) {
+      _appendJsonl("net/inbox.jsonl", evt);
+    }
+    function appendSlugInbox(evt) {
+      _appendJsonl("slug/global_inbox.jsonl", evt);
+    }
+    function _appendJsonl(rel, evt) {
       var FS = (window.Module && Module.FS) || null;
       if (!FS || !loveIdentity) return;
-      var base = SAVE_ROOT + "/" + loveIdentity + "/" + LOVEWEB_META_DIR + "/net";
-      try { FS.mkdirTree(base); } catch (e) {}
-      var path = base + "/inbox.jsonl";
+      var base = SAVE_ROOT + "/" + loveIdentity + "/" + LOVEWEB_META_DIR;
+      var path = base + "/" + rel;
+      var dir = path.substring(0, path.lastIndexOf("/"));
+      try { FS.mkdirTree(dir); } catch (e) {}
       var line = JSON.stringify(evt) + "\n";
       var existing = new Uint8Array(0);
       try { existing = FS.readFile(path); } catch (e) {}
       var combined;
       if (existing && existing.length + line.length > NET_INBOX_MAX_BYTES) {
-        // Trim from the front, keeping the last NET_INBOX_KEEP_FRAC of
-        // the cap. Walk forward from a target offset to the next newline
-        // so we never split a JSON line.
         var keep = Math.floor(NET_INBOX_MAX_BYTES * NET_INBOX_KEEP_FRAC);
         var startAt = Math.max(0, existing.length - keep);
         while (startAt < existing.length && existing[startAt] !== 0x0a) startAt++;
@@ -366,10 +422,22 @@
           } else if (nverb === "list") {
             parent.postMessage({ type: "loveweb:net:list" }, "*");
           } else if (nverb === "send") {
-            // "send <verb> <jsonpayload>". Payload is optional.
-            var sIdx = ntail.indexOf(" ");
-            var sVerb = sIdx < 0 ? ntail : ntail.slice(0, sIdx);
-            var sJson = sIdx < 0 ? "" : ntail.slice(sIdx + 1).trim();
+            // "send <verb> [--target=<userId>] <jsonpayload>".
+            // --target= is optional; payload is optional.
+            // Examples:
+            //   "send move {\"x\":1}"
+            //   "send boost --target=42 {\"amount\":10}"
+            var sTarget = null;
+            var rest = ntail;
+            // Pull out --target=<num> if present (anywhere in the tail).
+            var tm = rest.match(/(?:^|\s)--target=(\d+)(?=\s|$)/);
+            if (tm) {
+              sTarget = tm[1];
+              rest = (rest.slice(0, tm.index) + " " + rest.slice(tm.index + tm[0].length)).replace(/\s+/g, " ").trim();
+            }
+            var sIdx = rest.indexOf(" ");
+            var sVerb = sIdx < 0 ? rest : rest.slice(0, sIdx);
+            var sJson = sIdx < 0 ? "" : rest.slice(sIdx + 1).trim();
             if (!/^[a-z][a-z0-9_]*$/.test(sVerb || "")) {
               log("warn", "[[LOVEWEB_NET]]send with bad verb: " + sVerb);
               return true;
@@ -379,7 +447,55 @@
               try { sPayload = JSON.parse(sJson); }
               catch (e) { log("warn", "[[LOVEWEB_NET]]send: invalid JSON payload"); return true; }
             }
-            parent.postMessage({ type: "loveweb:net:send", verb: sVerb, payload: sPayload }, "*");
+            var sMsg = { type: "loveweb:net:send", verb: sVerb, payload: sPayload };
+            if (sTarget) sMsg.target = sTarget;
+            parent.postMessage(sMsg, "*");
+          } else if (nverb === "broadcast") {
+            // "broadcast <verb> <jsonpayload>" — slug-wide fanout.
+            var bIdx = ntail.indexOf(" ");
+            var bVerb = bIdx < 0 ? ntail : ntail.slice(0, bIdx);
+            var bJson = bIdx < 0 ? "" : ntail.slice(bIdx + 1).trim();
+            if (!/^[a-z][a-z0-9_]*$/.test(bVerb || "")) {
+              log("warn", "[[LOVEWEB_NET]]broadcast with bad verb: " + bVerb);
+              return true;
+            }
+            var bPayload = null;
+            if (bJson) {
+              try { bPayload = JSON.parse(bJson); }
+              catch (e) { log("warn", "[[LOVEWEB_NET]]broadcast: invalid JSON payload"); return true; }
+            }
+            parent.postMessage({ type: "loveweb:net:broadcast", verb: bVerb, payload: bPayload }, "*");
+          } else if (nverb === "slug_state") {
+            // "slug_state <jsonpatch>" — merge into the slug-scoped JSONB.
+            var ssPatch = null;
+            try { ssPatch = JSON.parse(ntail); }
+            catch (e) { log("warn", "[[LOVEWEB_NET]]slug_state: invalid JSON patch"); return true; }
+            if (!ssPatch || typeof ssPatch !== "object" || Array.isArray(ssPatch)) {
+              log("warn", "[[LOVEWEB_NET]]slug_state: patch must be a JSON object");
+              return true;
+            }
+            parent.postMessage({ type: "loveweb:net:slug_state", patch: ssPatch }, "*");
+          } else if (nverb === "profile") {
+            // "profile <userId>" — fetch a peer's public_profile.json
+            // (whatever the game wrote there). Result lands at
+            // __loveweb__/profiles/<userId>.json.
+            if (!/^\d+$/.test(ntail)) {
+              log("warn", "[[LOVEWEB_NET]]profile: userId must be a positive integer");
+              return true;
+            }
+            parent.postMessage({ type: "loveweb:net:profile", userId: ntail }, "*");
+          } else if (nverb === "slug_presence") {
+            // "slug_presence [rankBy] [limit]" — request a fresh
+            // presence snapshot (the stream pushes one every 8s anyway,
+            // this is for explicit refreshes).
+            var sp = ntail.split(/\s+/).filter(Boolean);
+            var spRankBy = sp[0] || null;
+            var spLimit  = sp[1] ? Number(sp[1]) : null;
+            parent.postMessage({
+              type: "loveweb:net:slug_presence",
+              rankBy: spRankBy,
+              limit: (spLimit && spLimit > 0) ? spLimit : null,
+            }, "*");
           } else if (nverb === "state") {
             var sPatch = null;
             try { sPatch = JSON.parse(ntail); }

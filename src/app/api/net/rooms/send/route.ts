@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { q } from "@/lib/db";
 import { getKv, NET_KV, type NetEvent } from "@/lib/kv";
-import { RESERVED_VERBS, SEND_RATE_BURST, SEND_RATE_PER_SEC } from "@/lib/net";
+import { RESERVED_VERBS, SEND_RATE_BURST, SEND_RATE_PER_SEC, SLUG_MIRROR_VERBS } from "@/lib/net";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -11,6 +11,11 @@ const Body = z.object({
   roomId: z.string().regex(/^\d+$/),
   verb: z.string().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/),
   payload: z.unknown().optional(),
+  // Optional unicast filter — when set, the stream route only delivers
+  // this event to the targeted user (plus the sender, who already has
+  // the synthesized echo in send:result). Reduces wasted bandwidth on
+  // boost / thanks / pool_request / wave verbs.
+  target: z.union([z.string().regex(/^\d+$/), z.number().int().positive()]).optional(),
 });
 
 // Best-effort token bucket. We don't atomically refill here — we just
@@ -104,12 +109,17 @@ export async function POST(req: Request) {
   const avatar = profile?.avatar_url ?? profile?.image ?? null;
 
   const payload = body.payload ?? {};
-  const ins = await q<{ id: string; created_at: Date }>(
-    `INSERT INTO net_room_events(room_id, user_id, verb, payload)
-     VALUES ($1,$2,$3,$4) RETURNING id, created_at`,
-    [body.roomId, userId, body.verb, payload as object]
+  const target = body.target != null ? Number(body.target) : null;
+  const ins = await q<{ id: string; created_at: Date; game_slug: string }>(
+    `WITH inserted AS (
+       INSERT INTO net_room_events(room_id, user_id, verb, payload, target_user_id)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at, room_id
+     )
+     SELECT i.id, i.created_at, r.game_slug
+       FROM inserted i JOIN net_rooms r ON r.id = i.room_id`,
+    [body.roomId, userId, body.verb, payload as object, target]
   );
-  const evt: NetEvent = {
+  const evt: NetEvent & { target?: string | null } = {
     id: String(ins[0].id),
     roomId: body.roomId,
     userId: String(userId),
@@ -118,6 +128,7 @@ export async function POST(req: Request) {
     verb: body.verb,
     payload,
     ts: new Date(ins[0].created_at).getTime(),
+    target: target != null ? String(target) : null,
   };
 
   // KV fanout — best-effort, mirroring the chat send. The SSE stream
@@ -131,6 +142,18 @@ export async function POST(req: Request) {
       await kv.incr(NET_KV.streamSeq(body.roomId));
     } catch (e) {
       console.warn("[net/send] KV fanout failed:", (e as Error)?.message);
+    }
+    // Slug-wide auto-mirror — only the "global ticker" verbs, and only
+    // for non-targeted broadcasts (a unicast event isn't world news).
+    if (target == null && SLUG_MIRROR_VERBS.has(body.verb)) {
+      try {
+        const slug = ins[0].game_slug;
+        await kv.lpush(NET_KV.slugStreamList(slug), evt);
+        await kv.ltrim(NET_KV.slugStreamList(slug), 0, 199);
+        await kv.incr(NET_KV.slugStreamSeq(slug));
+      } catch (e) {
+        console.warn("[net/send] slug mirror fanout failed:", (e as Error)?.message);
+      }
     }
   }
 

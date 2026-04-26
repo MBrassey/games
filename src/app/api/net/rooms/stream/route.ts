@@ -40,13 +40,14 @@ type EventRow = {
   verb: string;
   payload: unknown;
   created_at: Date;
+  target_user_id: number | null;
   handle: string | null;
   avatar_url: string | null;
   name: string | null;
   image: string | null;
 };
 
-function rowToEvent(roomId: string, r: EventRow): NetEvent {
+function rowToEvent(roomId: string, r: EventRow): NetEvent & { target: string | null } {
   return {
     id: String(r.id),
     roomId,
@@ -56,7 +57,16 @@ function rowToEvent(roomId: string, r: EventRow): NetEvent {
     verb: r.verb,
     payload: safeJson(r.payload) ?? r.payload ?? {},
     ts: new Date(r.created_at).getTime(),
+    target: r.target_user_id != null ? String(r.target_user_id) : null,
   };
+}
+
+// True if the subscriber should see this event — sender or addressed
+// target (or untargeted broadcast). Used by both the KV and DB paths.
+function deliverable(evt: { userId?: string | null; target?: string | null }, viewerId: string): boolean {
+  const t = evt.target;
+  if (t == null) return true;
+  return t === viewerId || evt.userId === viewerId;
 }
 
 async function fetchRoster(roomId: string): Promise<NetRosterEntry[]> {
@@ -156,8 +166,8 @@ export async function GET(req: Request) {
             49
           )) as unknown[];
           for (const raw of recent.reverse()) {
-            const evt = safeJson(raw);
-            if (evt) send("net", evt);
+            const evt = safeJson(raw) as { userId?: string | null; target?: string | null } | null;
+            if (evt && deliverable(evt, String(userId))) send("net", evt);
           }
           backfilledViaKv = true;
         } catch (e) {
@@ -168,15 +178,18 @@ export async function GET(req: Request) {
       if (!backfilledViaKv) {
         try {
           const rows = await q<EventRow>(
-            `SELECT e.id, e.user_id, e.verb, e.payload, e.created_at,
+            `SELECT e.id, e.user_id, e.verb, e.payload, e.created_at, e.target_user_id,
                     up.handle, up.avatar_url, u.name, u.image
                FROM net_room_events e
                LEFT JOIN users u ON u.id = e.user_id
                LEFT JOIN user_profiles up ON up.user_id = e.user_id
               WHERE e.room_id = $1
+                AND (e.target_user_id IS NULL
+                     OR e.target_user_id = $2
+                     OR e.user_id = $2)
               ORDER BY e.id DESC
               LIMIT 50`,
-            [roomId]
+            [roomId, userId]
           );
           for (const r of rows.reverse()) {
             send("net", rowToEvent(roomId, r));
@@ -246,8 +259,8 @@ export async function GET(req: Request) {
                 delta - 1
               )) as unknown[];
               for (const raw of items.reverse()) {
-                const evt = safeJson(raw);
-                if (evt) send("net", evt);
+                const evt = safeJson(raw) as { userId?: string | null; target?: string | null } | null;
+                if (evt && deliverable(evt, String(userId))) send("net", evt);
               }
               lastEventSeq = curEventSeq;
               deliveredAny = true;
@@ -273,16 +286,19 @@ export async function GET(req: Request) {
         if (!kv || !kvHealthy) {
           try {
             const rows = await q<EventRow>(
-              `SELECT e.id, e.user_id, e.verb, e.payload, e.created_at,
+              `SELECT e.id, e.user_id, e.verb, e.payload, e.created_at, e.target_user_id,
                       up.handle, up.avatar_url, u.name, u.image
                  FROM net_room_events e
                  LEFT JOIN users u ON u.id = e.user_id
                  LEFT JOIN user_profiles up ON up.user_id = e.user_id
                 WHERE e.room_id = $1
                   AND e.id > $2
+                  AND (e.target_user_id IS NULL
+                       OR e.target_user_id = $3
+                       OR e.user_id = $3)
                 ORDER BY e.id ASC
                 LIMIT 100`,
-              [roomId, lastEventId.toString()]
+              [roomId, lastEventId.toString(), userId]
             );
             for (const r of rows) {
               send("net", rowToEvent(roomId, r));

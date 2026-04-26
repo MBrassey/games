@@ -44,6 +44,11 @@ export const NET_KV = {
   // games. One key per (user, room); refilled on read at SEND_RATE/sec.
   sendBucket: (userId: number | string, roomId: number | string) =>
     `net:rl:send:${userId}:${roomId}`,
+  // Slug-scoped channels for cross-room fanout (the "global ticker"
+  // tier). Same shape as room channels but keyed on the game slug.
+  slugStreamSeq: (slug: string) => `net:slug:${slug}:stream:seq`,
+  slugStreamList: (slug: string) => `net:slug:${slug}:stream`,
+  slugPresence: (slug: string) => `net:slug:${slug}:presence`,
 } as const;
 
 export type NetEvent = {

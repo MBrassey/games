@@ -23,8 +23,13 @@ type IncomingMsg =
   | { type: "loveweb:net:create"; reqId?: string; name?: string; visibility?: "public" | "unlisted"; capacity?: number; state?: Record<string, unknown> }
   | { type: "loveweb:net:join"; reqId?: string; code?: string; roomId?: string }
   | { type: "loveweb:net:leave"; reqId?: string }
-  | { type: "loveweb:net:send"; reqId?: string; verb: string; payload?: unknown }
-  | { type: "loveweb:net:state"; reqId?: string; patch: Record<string, unknown>; expectedVersion?: number; replace?: boolean };
+  | { type: "loveweb:net:send"; reqId?: string; verb: string; payload?: unknown; target?: string | number }
+  | { type: "loveweb:net:state"; reqId?: string; patch: Record<string, unknown>; expectedVersion?: number; replace?: boolean }
+  // Slug-scoped extensions (#3 / #4 / #5 / #6 of the spec).
+  | { type: "loveweb:net:broadcast"; reqId?: string; verb: string; payload?: unknown }
+  | { type: "loveweb:net:slug_state"; reqId?: string; patch: Record<string, unknown>; expectedVersion?: number; replace?: boolean }
+  | { type: "loveweb:net:profile"; reqId?: string; userId: string }
+  | { type: "loveweb:net:slug_presence"; reqId?: string; rankBy?: string; limit?: number };
 
 type UnlockEntry = { key: string; unlockedAt: string; points: number };
 
@@ -61,6 +66,10 @@ export default function GameRunner({
   const currentRoomIdRef = useRef<string | null>(null);
   const netEventSourceRef = useRef<EventSource | null>(null);
   const netHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Slug-wide stream — open for the whole game-page lifetime so guests
+  // see "is anyone playing right now" + the global ticker before they
+  // join any room.
+  const slugEventSourceRef = useRef<EventSource | null>(null);
 
   const dismissToast = useCallback((id: string) => {
     setToasts((cur) => cur.filter((t) => t.id !== id));
@@ -358,6 +367,38 @@ export default function GameRunner({
     };
   }, [signedIn]);
 
+  // Slug-wide stream — opens once per game-page mount, no auth required.
+  // The portal forwards two event types into the iframe:
+  //   loveweb:net:slug_event      a single global-tier NetEvent
+  //   loveweb:net:slug_presence   active counts + topUsers snapshot
+  // Plus loveweb:net:slug_hello on initial handshake.
+  useEffect(() => {
+    const es = new EventSource(`/api/net/slug/stream?game=${encodeURIComponent(slug)}`);
+    slugEventSourceRef.current = es;
+    es.addEventListener("hello", (evt) => {
+      try {
+        const j = JSON.parse((evt as MessageEvent).data);
+        netReply({ type: "loveweb:net:slug_hello", ...j });
+      } catch {}
+    });
+    es.addEventListener("net", (evt) => {
+      try {
+        const j = JSON.parse((evt as MessageEvent).data);
+        netReply({ type: "loveweb:net:slug_event", event: j });
+      } catch {}
+    });
+    es.addEventListener("presence", (evt) => {
+      try {
+        const j = JSON.parse((evt as MessageEvent).data);
+        netReply({ type: "loveweb:net:slug_presence", presence: j });
+      } catch {}
+    });
+    return () => {
+      try { es.close(); } catch {}
+      slugEventSourceRef.current = null;
+    };
+  }, [slug]);
+
   // postMessage bridge
   useEffect(() => {
     const onMessage = async (ev: MessageEvent) => {
@@ -484,7 +525,12 @@ export default function GameRunner({
           const r = await fetch("/api/net/rooms/send", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ roomId: id, verb: data.verb, payload: data.payload ?? {} }),
+            body: JSON.stringify({
+              roomId: id,
+              verb: data.verb,
+              payload: data.payload ?? {},
+              target: data.target ?? undefined,
+            }),
           });
           if (!r.ok) {
             const j = await r.json().catch(() => ({}));
@@ -493,6 +539,66 @@ export default function GameRunner({
           }
           const j = await r.json();
           reply({ type: "loveweb:net:send:result", reqId: data.reqId, ok: true, event: j.event });
+        } else if (data.type === "loveweb:net:broadcast") {
+          if (!signedIn) {
+            reply({ type: "loveweb:net:broadcast:result", reqId: data.reqId, ok: false, error: "not signed in" });
+            return;
+          }
+          const r = await fetch("/api/net/slug/broadcast", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game: slug, verb: data.verb, payload: data.payload ?? {} }),
+          });
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            reply({ type: "loveweb:net:broadcast:result", reqId: data.reqId, ok: false, error: j?.error || `http ${r.status}` });
+            return;
+          }
+          const j = await r.json();
+          reply({ type: "loveweb:net:broadcast:result", reqId: data.reqId, ok: true, event: j.event });
+        } else if (data.type === "loveweb:net:slug_state") {
+          if (!signedIn) {
+            reply({ type: "loveweb:net:slug_state:result", reqId: data.reqId, ok: false, error: "not signed in" });
+            return;
+          }
+          const r = await fetch("/api/net/slug/state", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              game: slug,
+              patch: data.patch ?? {},
+              expectedVersion: data.expectedVersion,
+              replace: data.replace,
+            }),
+          });
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            reply({ type: "loveweb:net:slug_state:result", reqId: data.reqId, ok: false, error: j?.error || `http ${r.status}` });
+            return;
+          }
+          const j = await r.json();
+          reply({ type: "loveweb:net:slug_state:result", reqId: data.reqId, ok: true, state: j.state, version: j.version });
+        } else if (data.type === "loveweb:net:profile") {
+          const r = await fetch(`/api/net/profiles?game=${encodeURIComponent(slug)}&userId=${encodeURIComponent(data.userId)}`);
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            reply({ type: "loveweb:net:profile:result", reqId: data.reqId, ok: false, userId: data.userId, error: j?.error || `http ${r.status}` });
+            return;
+          }
+          const j = await r.json();
+          reply({ type: "loveweb:net:profile:result", reqId: data.reqId, ok: true, userId: data.userId, handle: j.handle, avatar: j.avatar, profile: j.profile, profileUpdatedAt: j.profileUpdatedAt });
+        } else if (data.type === "loveweb:net:slug_presence") {
+          const params = new URLSearchParams({ game: slug });
+          if (data.rankBy) params.set("rankBy", data.rankBy);
+          if (data.limit) params.set("limit", String(data.limit));
+          const r = await fetch(`/api/net/slug/presence?${params.toString()}`);
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            reply({ type: "loveweb:net:slug_presence:result", reqId: data.reqId, ok: false, error: j?.error || `http ${r.status}` });
+            return;
+          }
+          const j = await r.json();
+          reply({ type: "loveweb:net:slug_presence:result", reqId: data.reqId, ok: true, presence: j });
         } else if (data.type === "loveweb:net:state") {
           const id = currentRoomIdRef.current;
           if (!id) {
