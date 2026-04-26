@@ -746,6 +746,213 @@ end
   not formally removed until they explicitly `leave`, so a momentary
   network blip won't kick them out of the room.
 
+### Slug-wide (cross-room) layer
+
+Once your population grows past one room's capacity, players in
+different rooms can't see each other through the per-room channel —
+that's intentional, since broadcasting every move from every room to
+the whole slug would melt the KV budget. The portal provides a
+**slug-scoped** tier on top: lower-rate, mirrors only "global ticker"
+verbs, and is open to every player on the same game whether they're in
+a room or not (even guests).
+
+Three things sit on this tier:
+
+#### 1. Slug presence — "is anyone playing right now?"
+
+The runtime maintains a live snapshot at `__loveweb__/slug/active.json`
+refreshed every ~8 s while the game page is open:
+
+```json
+{
+  "slug":          "zmine",
+  "activeUsers":   7,
+  "totalRooms":    3,
+  "last24hUsers":  23,
+  "allTimeUsers":  156,
+  "topUsers": [
+    {
+      "userId":     "42",
+      "handle":     "thepearlking",
+      "avatar":     "https://avatars.…/u/…png",
+      "lastSeenAt": "2026-04-25T14:22:01Z",
+      "profile":    { /* whatever the user wrote to public_profile.json */ }
+    },
+    …
+  ],
+  "at": 1745618521234
+}
+```
+
+Read it from Lua any time:
+
+```lua
+local function loadSlugPresence()
+  if not love.filesystem.getInfo("__loveweb__/slug/active.json") then
+    return nil
+  end
+  local ok, data = pcall(json.decode, love.filesystem.read("__loveweb__/slug/active.json"))
+  return ok and data or nil
+end
+```
+
+The `topUsers[*].profile` payload is whatever your game previously
+wrote to `public_profile.json` (see #3 below). The portal does not
+prescribe its shape — `facility_name`, `z_lifetime`, `hashrate`, or
+anything else you care about. To rank by a top-level numeric field of
+your profile, request a refresh with the rank verb:
+
+```lua
+print("[[LOVEWEB_NET]]slug_presence z_lifetime 12")
+-- result lands in __loveweb__/slug/active.json with topUsers[] sorted desc
+```
+
+The HTTP endpoint behind it is also publicly readable (`GET /api/net/slug/presence?game=<slug>&rankBy=<field>&limit=<n>`),
+so portal-side widgets can show the same population badge.
+
+#### 2. Slug event stream (the "global ticker")
+
+The portal automatically mirrors a small set of room events into a
+slug-wide stream — the verbs every other player on the same game
+should hear, regardless of room. Default mirror set:
+
+```
+stats   block   halving   build   wave   flag   achievement
+```
+
+Anything you `[[LOVEWEB_NET]]send` with one of these verbs gets
+mirrored to the slug stream **once** (no double-fanout to other room
+members; they get it through the room stream). Targeted (`--target=`)
+sends are NOT mirrored — they're 1:1 messages, not world news.
+
+For verbs outside the mirror set, use the explicit broadcast verb:
+
+```lua
+print('[[LOVEWEB_NET]]broadcast surge_started {"started_at":1745618521,"duration_ms":120000}')
+```
+
+Both auto-mirrored and explicitly-broadcast events land at
+`__loveweb__/slug/global_inbox.jsonl`, an append-only JSONL with the
+same ~256 KB rolling cap as the room inbox. Tail it the same way:
+
+```lua
+local watermark = state.global_watermark or "0"
+for line in love.filesystem.lines("__loveweb__/slug/global_inbox.jsonl") do
+  local ok, evt = pcall(json.decode, line)
+  if ok and tonumber(evt.id) > tonumber(watermark) then
+    watermark = evt.id
+    onSlugEvent(evt) -- handle stats / block / build / your-custom-verb
+  end
+end
+state.global_watermark = watermark
+```
+
+`broadcast` is rate-limited at half the per-room ceiling (~6/s burst
+12/s) so a bug in your update loop can't torch every other player's
+session. Rate-limit failures show up in `__loveweb__/net/last_result.json`
+with `ok:false, error:"rate limited"`.
+
+#### 3. Public profile (peer ghosts)
+
+If your game `love.filesystem.write`s a file at the relative path
+`public_profile.json`, anyone (signed in or not) can read it via the
+profiles endpoint. This is the substrate for "ghost facilities" —
+showing a peer's last-known stats / cosmetics / facility name even
+when they're offline and have never been in your room.
+
+The file is a regular cloud-save: write whatever JSON you like, and
+the existing save-sync round-trips it like any other file. Just keep
+it small — under ~32 KB is courteous.
+
+```lua
+local function publishProfile()
+  love.filesystem.write("public_profile.json", json.encode({
+    facility_name = state.facility_name,
+    z_lifetime    = stats.z_lifetime,
+    z_per_sec     = stats.z_per_sec,
+    hashrate      = stats.hashrate,
+    cosmetics     = state.cosmetics,
+    updated_at    = os.time(),
+  }))
+end
+```
+
+Fetch a peer's profile by user id:
+
+```lua
+print("[[LOVEWEB_NET]]profile 42")
+-- result lands at __loveweb__/profiles/42.json:
+--   { userId, handle, avatar, profile, profileUpdatedAt, fetchedAt }
+```
+
+`profile` is `null` if the peer has never written one. Cache the file
+locally — re-fetch on demand when the game wants a fresh snapshot.
+
+The portal-side endpoint is `GET /api/net/profiles?game=<slug>&userId=<id>`
+if you ever want to call it from somewhere outside Lua.
+
+#### 4. Slug-wide persistent state
+
+A single durable JSONB blob keyed on the slug, separate from any
+room. Useful for an all-time leaderboard, a scheduled surge timer, a
+world-flag, an "all-time blocks found" counter — anything that needs
+to outlive any individual room.
+
+```lua
+-- Read (passive — the runtime auto-mirrors latest snapshot here):
+local function readSlugState()
+  if not love.filesystem.getInfo("__loveweb__/slug/state.json") then return {} end
+  local ok, data = pcall(json.decode, love.filesystem.read("__loveweb__/slug/state.json"))
+  if not ok then return {} end
+  return data.state or data or {}
+end
+
+-- Write (shallow merge by default; pass `{replace=true}` payload via
+-- HTTP if you need full replace; the magic-print form is always merge):
+print('[[LOVEWEB_NET]]slug_state {"all_time_blocks":12345,"surge_until":1745700000}')
+```
+
+Like room state, every slug_state mutation increments `state_version`.
+Pass `expectedVersion` (via direct HTTP only — the magic-print form is
+last-write-wins) to do CAS.
+
+The state-mutation event is auto-mirrored into `slug/global_inbox.jsonl`
+with `verb = "slug_state"` so all subscribers can re-sync without
+polling — same pattern as room state.
+
+#### 5. Targeted unicast (per-recipient delivery)
+
+Add `--target=<userId>` to a `send` to address it to one peer. The
+portal stream filters delivery: only the sender and the addressed
+recipient see the event; other room members don't.
+
+```lua
+-- Without target — broadcast to every member of the room:
+print('[[LOVEWEB_NET]]send wave {"emoji":"👋"}')
+
+-- With target — only userId 42 sees it (plus the sender, in their
+-- own send:result echo):
+print('[[LOVEWEB_NET]]send boost --target=42 {"amount":10,"kind":"hash"}')
+```
+
+Targeted sends bypass the slug-mirror auto-fanout and don't show up in
+`slug/global_inbox.jsonl`. The `target` field is also present on the
+delivered NetEvent (and the row in `last_result.json`) so the receiver
+can confirm "this was for me" before applying the side-effect.
+
+#### Authority model (recap)
+
+- **Anyone** can read slug presence + slug state + any peer's public
+  profile. No auth required.
+- **Authenticated members** can:
+  - mutate room state and broadcast room events (existing rules)
+  - mutate slug state via `slug_state`
+  - emit slug-wide broadcast events
+  - target a `send` at any user id (the recipient doesn't have to be in
+    the room — they just won't see it unless they are)
+- **`public_profile.json`** is opt-in: games that don't want any
+  cross-game peer visibility simply don't write the file.
+
 ### What's still off-limits
 
 - **Raw sockets** (LuaSocket, TCP, UDP). The portal protocol above is
@@ -1116,6 +1323,13 @@ table.
 | `loveweb:net:send:result`      | `{ reqId?, ok, event?, error? }`                         | Response to a `[[LOVEWEB_NET]]send`. Includes 429 rate-limit errors. |
 | `loveweb:net:state:result`     | `{ reqId?, ok, state?, version?, error? }`               | Response to a `[[LOVEWEB_NET]]state`. 409 on version conflict. |
 | `loveweb:net:list:result`      | `{ reqId?, rooms: RoomSummary[] }`                       | Response to a `[[LOVEWEB_NET]]list`.                  |
+| `loveweb:net:slug_hello`       | `{ slug, mode, at }`                                     | Slug-stream handshake. Runtime resets `__loveweb__/slug/global_inbox.jsonl`. |
+| `loveweb:net:slug_event`       | `{ event: NetEvent }`                                    | Slug-tier event (mirrored room verb or explicit broadcast). Appended to `__loveweb__/slug/global_inbox.jsonl`. |
+| `loveweb:net:slug_presence`    | `{ presence: { slug, activeUsers, totalRooms, last24hUsers, allTimeUsers, topUsers } }` | ~8s presence snapshot. Written to `__loveweb__/slug/active.json`. |
+| `loveweb:net:broadcast:result` | `{ reqId?, ok, event?, error? }`                         | Response to a `[[LOVEWEB_NET]]broadcast`. Rate-limit errors land here. |
+| `loveweb:net:slug_state:result`| `{ reqId?, ok, state?, version?, error? }`               | Response to a `[[LOVEWEB_NET]]slug_state`. Mirrored to `__loveweb__/slug/state.json` on success. |
+| `loveweb:net:profile:result`   | `{ reqId?, ok, userId, handle?, avatar?, profile?, profileUpdatedAt?, error? }` | Response to a `[[LOVEWEB_NET]]profile <userId>`. Written to `__loveweb__/profiles/<userId>.json`. |
+| `loveweb:net:slug_presence:result` | `{ reqId?, ok, presence?, error? }`                  | Response to a `[[LOVEWEB_NET]]slug_presence` request. Same shape as the streamed snapshot. |
 
 ### Runtime iframe → parent (portal)
 
@@ -1133,9 +1347,13 @@ table.
 | `loveweb:net:create`            | `{ name?, visibility?, capacity?, state? }`             | Produced by `[[LOVEWEB_NET]]create <name>`. Parent calls `POST /api/net/rooms` and auto-joins. |
 | `loveweb:net:join`              | `{ code? \| roomId? }`                                  | Produced by `[[LOVEWEB_NET]]join <CODE>`. Parent calls `POST /api/net/rooms/join`. |
 | `loveweb:net:leave`             | `{}`                                                    | Produced by `[[LOVEWEB_NET]]leave`. Tears down SSE.     |
-| `loveweb:net:send`              | `{ verb, payload? }`                                    | Produced by `[[LOVEWEB_NET]]send <verb> <json>`. Broadcasts to room. |
+| `loveweb:net:send`              | `{ verb, payload?, target? }`                           | Produced by `[[LOVEWEB_NET]]send <verb> [--target=<userId>] <json>`. Optional `target` makes it unicast. |
 | `loveweb:net:state`             | `{ patch, expectedVersion?, replace? }`                 | Produced by `[[LOVEWEB_NET]]state <patch>`. Mutates persistent state. |
 | `loveweb:net:list`              | `{}`                                                    | Produced by `[[LOVEWEB_NET]]list`. Parent calls `GET /api/net/rooms`. |
+| `loveweb:net:broadcast`         | `{ verb, payload? }`                                    | Produced by `[[LOVEWEB_NET]]broadcast <verb> <json>`. Slug-wide fanout (no room required). |
+| `loveweb:net:slug_state`        | `{ patch, expectedVersion?, replace? }`                 | Produced by `[[LOVEWEB_NET]]slug_state <patch>`. Mutates the slug-scoped JSONB blob. |
+| `loveweb:net:profile`           | `{ userId }`                                            | Produced by `[[LOVEWEB_NET]]profile <userId>`. Fetches a peer's `public_profile.json`. |
+| `loveweb:net:slug_presence`     | `{ rankBy?, limit? }`                                   | Produced by `[[LOVEWEB_NET]]slug_presence [<rankBy> [<limit>]]`. Forces a fresh presence refresh. |
 
 `NetEvent` shape:
 

@@ -45,3 +45,30 @@ export const RESERVED_VERBS = new Set([
   "state",
   "kick",
 ]);
+
+// Verbs that the room→slug auto-mirror copies into the slug-wide event
+// stream. These are the "global ticker" events most games want every
+// player base to see whether or not they're in the same room (block
+// found, wave start, halving, etc.). Anything outside this list stays
+// room-local; games that need a custom verb to fan out can use the
+// explicit /api/net/slug/broadcast (or [[LOVEWEB_NET]]broadcast) path.
+export const SLUG_MIRROR_VERBS = new Set([
+  "stats",
+  "block",
+  "halving",
+  "build",
+  "wave",
+  "flag",
+  "achievement",
+]);
+
+// Top-N facilities surfaced via the slug presence endpoint. The portal
+// reads each candidate's public_profile.json out of game_saves and
+// embeds it as the `profile` field — games decide what to put inside
+// that file (facility name, lifetime score, hashrate, cosmetics, etc.).
+export const SLUG_PRESENCE_TOP_DEFAULT = 20;
+export const SLUG_PRESENCE_TOP_MAX = 50;
+
+// How recently a user must have been seen (room membership heartbeat
+// OR a slug event) to count as "active" in slug presence.
+export const SLUG_ACTIVE_WINDOW_MS = 60_000;
