@@ -43,6 +43,37 @@ Portal code: [CC0](./LICENSE). Games: each under its own license.
   <tr>
     <td width="50%" valign="top">
       <h3>
+        <a href="https://github.com/MBrassey/zmine">
+          ZMINE — Zepton Mining
+        </a>
+      </h3>
+      <p>
+        <em>mine zeptons. power the grid. light up the void.</em>
+      </p>
+      <p>
+        A glowing-green proof-of-work tycoon with a walkable Roblox-style
+        world, real cross-player presence on the A-TEK Mesh, layered
+        procedural audio, and a full ladder of cosmetic unlocks. Click
+        the orb, build hashboards and reactors, balance your grid against
+        brownout, ride global surge events, and find blocks across a
+        100-block halving cycle.
+      </p>
+      <p>
+        <strong>Developer:</strong>
+        <a href="https://github.com/MBrassey">@MBrassey</a><br/>
+        <strong>Source:</strong>
+        <a href="https://github.com/MBrassey/zmine">
+          github.com/MBrassey/zmine
+        </a><br/>
+        <strong>Tags:</strong> tycoon · clicker · mmo · crypto<br/>
+        <strong>Play:</strong>
+        <a href="https://games.brassey.io/games/zmine">
+          games.brassey.io/games/zmine
+        </a>
+      </p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>
         <a href="https://github.com/ThePearlKing/claude-mythos-game">
           Claude: Mythos
         </a>
@@ -69,23 +100,16 @@ Portal code: [CC0](./LICENSE). Games: each under its own license.
         </a>
       </p>
     </td>
-    <td width="50%" valign="top">
-      <h3>Add your own</h3>
-      <p>
-        The portal is built to onboard new titles with a single entry in
-        <code>src/lib/games.ts</code>, pointing at any LÖVE2D GitHub repo.
-        The build pipeline handles the rest: clones the source, applies
-        LuaJIT → Lua 5.1 compat patches, packs a <code>.love</code>,
-        compiles via love.js, and drops it into
-        <code>public/games/&lt;slug&gt;/runtime/</code> on every deploy.
-      </p>
-      <p>
-        See <a href="#adding-a-new-game">Adding a new game</a> below for
-        the one-line registry entry.
-      </p>
-    </td>
   </tr>
 </table>
+
+> **Add your own.** The portal onboards new titles with a single entry in
+> `src/lib/games.ts` pointing at any LÖVE2D GitHub repo. The build
+> pipeline handles the rest: clones the source, applies LuaJIT → Lua 5.1
+> compat patches, packs a `.love`, compiles via love.js, and drops it
+> into `public/games/<slug>/runtime/` on every deploy. See
+> [Adding a new game](#adding-a-new-game) for the one-line registry
+> entry.
 
 ---
 

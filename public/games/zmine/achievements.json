@@ -1,0 +1,319 @@
+{
+  "version": 1,
+  "achievements": [
+    {
+      "key": "first_zepton",
+      "title": "First Spark",
+      "description": "Mine your very first zepton.",
+      "glyph": "⚡",
+      "points": 5,
+      "rarity": "common"
+    },
+    {
+      "key": "name_facility",
+      "title": "Established",
+      "description": "Christen your mining facility.",
+      "glyph": "🏷",
+      "points": 5,
+      "rarity": "common"
+    },
+    {
+      "key": "z_1k",
+      "title": "Kilozepton",
+      "description": "Accumulate 1,000 zeptons.",
+      "glyph": "K",
+      "points": 10,
+      "rarity": "common"
+    },
+    {
+      "key": "z_1m",
+      "title": "Megazepton",
+      "description": "Accumulate 1,000,000 zeptons.",
+      "glyph": "M",
+      "points": 25,
+      "rarity": "uncommon"
+    },
+    {
+      "key": "z_1b",
+      "title": "Gigazepton",
+      "description": "Accumulate 1,000,000,000 zeptons.",
+      "glyph": "G",
+      "points": 50,
+      "rarity": "rare"
+    },
+    {
+      "key": "z_1t",
+      "title": "Terazepton",
+      "description": "Accumulate 1,000,000,000,000 zeptons.",
+      "glyph": "T",
+      "points": 100,
+      "rarity": "legendary"
+    },
+    {
+      "key": "first_miner",
+      "title": "Hashes Begin",
+      "description": "Deploy your first ASIC-Z1 miner.",
+      "glyph": "▣",
+      "points": 10,
+      "rarity": "common"
+    },
+    {
+      "key": "ten_miners",
+      "title": "Hash Farm",
+      "description": "Deploy 10 miners of any tier.",
+      "glyph": "▤",
+      "points": 15,
+      "rarity": "common"
+    },
+    {
+      "key": "hundred_miners",
+      "title": "Industrial",
+      "description": "Deploy 100 miners total.",
+      "glyph": "▦",
+      "points": 30,
+      "rarity": "uncommon"
+    },
+    {
+      "key": "thousand_miners",
+      "title": "Hyperhash",
+      "description": "Deploy 1,000 miners total.",
+      "glyph": "▩",
+      "points": 75,
+      "rarity": "rare"
+    },
+    {
+      "key": "first_solar",
+      "title": "Photons Captured",
+      "description": "Build your first solar array.",
+      "glyph": "☀",
+      "points": 5,
+      "rarity": "common"
+    },
+    {
+      "key": "first_wind",
+      "title": "Catching the Breeze",
+      "description": "Build your first wind turbine.",
+      "glyph": "🌬",
+      "points": 10,
+      "rarity": "common"
+    },
+    {
+      "key": "first_hydro",
+      "title": "Riverflow",
+      "description": "Build your first hydroelectric dam.",
+      "glyph": "🌊",
+      "points": 15,
+      "rarity": "uncommon"
+    },
+    {
+      "key": "first_geothermal",
+      "title": "Heart of the Earth",
+      "description": "Build your first geothermal plant.",
+      "glyph": "🌋",
+      "points": 20,
+      "rarity": "uncommon"
+    },
+    {
+      "key": "first_nuclear",
+      "title": "Critical Mass",
+      "description": "Bring your first nuclear reactor online.",
+      "glyph": "☢",
+      "points": 35,
+      "rarity": "rare"
+    },
+    {
+      "key": "first_fusion",
+      "title": "Stars on Earth",
+      "description": "Ignite your first fusion reactor.",
+      "glyph": "⚛",
+      "points": 75,
+      "rarity": "rare"
+    },
+    {
+      "key": "first_antimatter",
+      "title": "Annihilation",
+      "description": "Construct an antimatter trap reactor.",
+      "glyph": "✦",
+      "points": 150,
+      "rarity": "legendary"
+    },
+    {
+      "key": "first_zeropoint",
+      "title": "Vacuum of Power",
+      "description": "Tap the zero-point field.",
+      "glyph": "∞",
+      "points": 250,
+      "rarity": "legendary"
+    },
+    {
+      "key": "all_energy_types",
+      "title": "Diversified Grid",
+      "description": "Operate every type of energy infrastructure.",
+      "glyph": "⚙",
+      "points": 100,
+      "rarity": "rare"
+    },
+    {
+      "key": "all_miner_tiers",
+      "title": "Full Stack",
+      "description": "Operate at least one of every miner tier.",
+      "glyph": "⌬",
+      "points": 100,
+      "rarity": "rare"
+    },
+    {
+      "key": "click_100",
+      "title": "Manual Labor",
+      "description": "Click the core 100 times.",
+      "glyph": "👆",
+      "points": 5,
+      "rarity": "common"
+    },
+    {
+      "key": "click_1000",
+      "title": "Kinetic",
+      "description": "Click the core 1,000 times.",
+      "glyph": "👊",
+      "points": 25,
+      "rarity": "uncommon"
+    },
+    {
+      "key": "rate_1k",
+      "title": "Steady Hum",
+      "description": "Reach 1,000 Z/s production.",
+      "glyph": "≈",
+      "points": 15,
+      "rarity": "uncommon"
+    },
+    {
+      "key": "rate_1m",
+      "title": "Megaflow",
+      "description": "Reach 1,000,000 Z/s production.",
+      "glyph": "≋",
+      "points": 50,
+      "rarity": "rare"
+    },
+    {
+      "key": "rate_1b",
+      "title": "Roaring River",
+      "description": "Reach 1,000,000,000 Z/s production.",
+      "glyph": "⩩",
+      "points": 150,
+      "rarity": "legendary"
+    },
+    {
+      "key": "blackout",
+      "title": "Brownout",
+      "description": "Run out of power and stall production.",
+      "glyph": "🔌",
+      "points": 5,
+      "rarity": "common"
+    },
+    {
+      "key": "surplus_50",
+      "title": "Overcapacity",
+      "description": "Maintain 50% surplus power capacity.",
+      "glyph": "↑",
+      "points": 20,
+      "rarity": "uncommon"
+    },
+    {
+      "key": "balanced_grid",
+      "title": "Engineer's Pride",
+      "description": "Run at 95–100% capacity utilization.",
+      "glyph": "⌗",
+      "points": 30,
+      "rarity": "uncommon"
+    },
+    {
+      "key": "play_1h",
+      "title": "Operator",
+      "description": "Run the facility for one hour.",
+      "glyph": "🕐",
+      "points": 10,
+      "rarity": "common"
+    },
+    {
+      "key": "play_10h",
+      "title": "Tycoon",
+      "description": "Run the facility for ten hours.",
+      "glyph": "🕥",
+      "points": 50,
+      "rarity": "rare"
+    },
+    {
+      "key": "first_upgrade",
+      "title": "R&D Spark",
+      "description": "Purchase your first research upgrade.",
+      "glyph": "🧪",
+      "points": 10,
+      "rarity": "common"
+    },
+    {
+      "key": "all_upgrades",
+      "title": "Singularity",
+      "description": "Purchase every research upgrade in the tree.",
+      "glyph": "✺",
+      "points": 200,
+      "rarity": "legendary",
+      "hidden": true
+    },
+    {
+      "key": "secret_zen",
+      "title": "Zenflow",
+      "description": "Hold the core for ten seconds without releasing.",
+      "glyph": "☯",
+      "points": 50,
+      "rarity": "rare",
+      "hidden": true
+    },
+    {
+      "key": "first_block",
+      "title": "Block Found",
+      "description": "Find your first proof-of-work block.",
+      "glyph": "⛏",
+      "points": 15,
+      "rarity": "common"
+    },
+    {
+      "key": "ten_blocks",
+      "title": "Steady Cadence",
+      "description": "Find 10 blocks.",
+      "glyph": "⛏",
+      "points": 30,
+      "rarity": "uncommon"
+    },
+    {
+      "key": "first_halving",
+      "title": "Halved",
+      "description": "Live through your first reward halving.",
+      "glyph": "½",
+      "points": 25,
+      "rarity": "uncommon"
+    },
+    {
+      "key": "first_boost",
+      "title": "Send a Pulse",
+      "description": "Boost another mesh facility.",
+      "glyph": "⇄",
+      "points": 5,
+      "rarity": "common"
+    },
+    {
+      "key": "first_pool",
+      "title": "Sync to Mesh",
+      "description": "Join a mining pool with another facility.",
+      "glyph": "⛓",
+      "points": 10,
+      "rarity": "common"
+    },
+    {
+      "key": "ten_boosts",
+      "title": "Generous Operator",
+      "description": "Send 10 boosts to mesh peers.",
+      "glyph": "✦",
+      "points": 25,
+      "rarity": "uncommon"
+    }
+  ]
+}
