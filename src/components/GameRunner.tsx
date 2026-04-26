@@ -177,10 +177,16 @@ export default function GameRunner({
     };
   }, []);
 
-  // Music plays consistently across all pages — including game pages.
-  // The user's mute button controls only the soundtrack; no per-page
-  // suppression. Removed the old softMuteMusic() effect that used to
-  // silence music here and restore it on unmount.
+  // Mute the portal soundtrack while a game is running. The game has
+  // its own audio (love.audio) and the portal's procedural music
+  // colliding with it muddies both. softMuteMusic() returns a refcount
+  // release; on unmount we restore the previous state — the user's
+  // explicit Mute button preference is preserved either way (the
+  // suppression counter sits below the user toggle in sound.ts).
+  useEffect(() => {
+    const release = sound.softMuteMusic();
+    return () => { try { release(); } catch {} };
+  }, []);
 
   // Playtime tracking. Every 30s we POST to /api/stats/heartbeat, but
   // ONLY if the player has been interactive within the last 2 minutes
