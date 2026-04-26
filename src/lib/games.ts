@@ -40,6 +40,15 @@ export type GameEntry = {
     mode: "movement" | "tap" | "off";
     actions?: Array<{ code: string; label: string }>; // right-side buttons
   };
+
+  // Hide the floating top-right "↩ exit" handle that the portal
+  // overlays on the game frame. The bottom-of-frame "exit game" button
+  // is unaffected — that one is the always-available stranded-player
+  // escape hatch and is non-negotiable. Use this when the floating
+  // handle visually clashes with on-canvas UI (e.g. zmine's HUD).
+  // Games can also flip this at runtime by emitting
+  // `print("[[LOVEWEB_FX]]hide_exit_handle")`.
+  hideExitHandle?: boolean;
 };
 
 // Resolve the effective LÖVE identity for a game — explicit entry
@@ -80,6 +89,10 @@ export const GAMES: GameEntry[] = [
     // Tycoon UI is mouse/tap-driven; raw browser touches already reach
     // love.js. Skip the joystick overlay.
     controls: { mode: "tap" },
+    // The status-bar "exit game" button below the frame already covers
+    // the escape-hatch role; the floating top-right handle clashes with
+    // zmine's on-canvas HUD.
+    hideExitHandle: true,
   },
   {
     slug: "claude-mythos",
