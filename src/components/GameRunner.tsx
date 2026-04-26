@@ -141,6 +141,74 @@ export default function GameRunner({
     }
   }, []);
 
+  // Steal space + arrow keys back from any focused parent-page control
+  // and forward them into the game iframe. Without this, after the
+  // player taps the chat toggle / mute / mobile FAB / "controls" pill,
+  // that button retains keyboard focus — and the next press of space
+  // re-activates it, which (for chat especially) covers the canvas
+  // and reads as the game crashing. Browsers activate <button> on
+  // space; <a> on Enter. We watch both.
+  useEffect(() => {
+    const GAME_KEYS = new Set([
+      " ", "Spacebar",
+      "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+      "Enter", "Tab",
+    ]);
+    const onKey = (e: KeyboardEvent) => {
+      if (!GAME_KEYS.has(e.key)) return;
+      const t = e.target as HTMLElement | null;
+      // Don't interfere with text fields (chat input, signin, etc.)
+      if (t?.matches?.("input, textarea, select, [contenteditable=true], [contenteditable='true']")) return;
+      const iframe = iframeRef.current;
+      if (!iframe) return;
+      // If the iframe (or something inside it) is already the active
+      // element, the key is reaching love.js — leave it alone.
+      const active = document.activeElement;
+      if (active === iframe) return;
+      // Otherwise some parent-page control has focus. Prevent it from
+      // activating, blur it, refocus the iframe, and synthesize the
+      // same keystroke into the iframe so the player doesn't lose the
+      // input they just pressed.
+      const isFocusedControl =
+        active instanceof HTMLElement &&
+        active !== document.body &&
+        (active.tagName === "BUTTON" || active.tagName === "A" ||
+         active.tagName === "SUMMARY" || active.tabIndex >= 0);
+      if (!isFocusedControl) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try { (active as HTMLElement).blur?.(); } catch {}
+      try { iframe.focus(); iframe.contentWindow?.focus(); } catch {}
+      const idoc = iframe.contentDocument;
+      if (!idoc) return;
+      const init: KeyboardEventInit & { keyCode: number; which: number } = {
+        key: e.key === "Spacebar" ? " " : e.key,
+        code: e.code,
+        keyCode: e.keyCode,
+        which: e.keyCode,
+        shiftKey: e.shiftKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        metaKey: e.metaKey,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      };
+      try {
+        idoc.dispatchEvent(new KeyboardEvent("keydown", init));
+        // Synthesize a paired keyup shortly after so love.js doesn't
+        // think the key is held forever (the real keyup fires on the
+        // parent and never reaches the iframe).
+        const upInit = { ...init, type: undefined };
+        setTimeout(() => {
+          try { idoc.dispatchEvent(new KeyboardEvent("keyup", upInit)); } catch {}
+        }, 60);
+      } catch {}
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
   // Block mouse-back / mouse-forward navigation while on a game page. The
   // side buttons (button 3 / 4) trigger browser history navigation by
   // default — easy to press by accident mid-game. We preventDefault on
