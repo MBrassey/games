@@ -881,7 +881,8 @@ Fetch a peer's profile by user id:
 
 ```lua
 print("[[LOVEWEB_NET]]profile 42")
--- result lands at __loveweb__/profiles/42.json:
+-- result lands at __loveweb__/net/profiles/42.json (canonical) and
+-- __loveweb__/profiles/42.json (legacy mirror, same content):
 --   { userId, handle, avatar, profile, profileUpdatedAt, fetchedAt }
 ```
 
@@ -1328,7 +1329,7 @@ table.
 | `loveweb:net:slug_presence`    | `{ presence: { slug, activeUsers, totalRooms, last24hUsers, allTimeUsers, topUsers } }` | ~8s presence snapshot. Written to `__loveweb__/slug/active.json`. |
 | `loveweb:net:broadcast:result` | `{ reqId?, ok, event?, error? }`                         | Response to a `[[LOVEWEB_NET]]broadcast`. Rate-limit errors land here. |
 | `loveweb:net:slug_state:result`| `{ reqId?, ok, state?, version?, error? }`               | Response to a `[[LOVEWEB_NET]]slug_state`. Mirrored to `__loveweb__/slug/state.json` on success. |
-| `loveweb:net:profile:result`   | `{ reqId?, ok, userId, handle?, avatar?, profile?, profileUpdatedAt?, error? }` | Response to a `[[LOVEWEB_NET]]profile <userId>`. Written to `__loveweb__/profiles/<userId>.json`. |
+| `loveweb:net:profile:result`   | `{ reqId?, ok, userId, handle?, avatar?, profile?, profileUpdatedAt?, error? }` | Response to a `[[LOVEWEB_NET]]profile <userId>`. Written to `__loveweb__/net/profiles/<userId>.json` (canonical) and mirrored to `__loveweb__/profiles/<userId>.json` for older wrappers. |
 | `loveweb:net:slug_presence:result` | `{ reqId?, ok, presence?, error? }`                  | Response to a `[[LOVEWEB_NET]]slug_presence` request. Same shape as the streamed snapshot. |
 
 ### Runtime iframe → parent (portal)
