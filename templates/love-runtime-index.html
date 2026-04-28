@@ -206,14 +206,20 @@
         try { writeMetaFile("slug/state.json", { state: d.state, version: d.version }); } catch (e) {}
       }
       if (d.type === "loveweb:net:profile:result" && d.ok && d.userId) {
-        try { writeMetaFile("profiles/" + String(d.userId) + ".json", {
+        // Canonical path is `__loveweb__/net/profiles/<userId>.json`
+        // (sibling of inbox.jsonl + identity.json). Also mirror to the
+        // legacy `__loveweb__/profiles/<userId>.json` so older game
+        // wrappers that read the older path keep working.
+        var profileBody = {
           userId: d.userId,
           handle: d.handle || null,
           avatar: d.avatar || null,
           profile: d.profile || null,
           profileUpdatedAt: d.profileUpdatedAt || null,
           fetchedAt: Date.now(),
-        }); } catch (e) {}
+        };
+        try { writeMetaFile("net/profiles/" + String(d.userId) + ".json", profileBody); } catch (e) {}
+        try { writeMetaFile("profiles/" + String(d.userId) + ".json", profileBody); } catch (e) {}
       }
       if (d.type === "loveweb:net:slug_presence:result" && d.ok && d.presence) {
         try { writeMetaFile("slug/active.json", d.presence); } catch (e) {}
