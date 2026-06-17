@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "achievements": [
+    {
+      "key": "decipher",
+      "title": "Rosetta",
+      "description": "Open the codex — the only key to the tongue.",
+      "glyph": "❦",
+      "points": 5,
+      "rarity": "common",
+      "category": "meta"
+    },
+    {
+      "key": "first_unmaking",
+      "title": "First Unmaking",
+      "description": "Unmake your first foe.",
+      "glyph": "🗡",
+      "points": 10,
+      "rarity": "common",
+      "category": "combat"
+    },
+    {
+      "key": "first_sigil",
+      "title": "A Pin Loosened",
+      "description": "Light your first sigil at a shrine.",
+      "glyph": "✷",
+      "points": 20,
+      "rarity": "uncommon",
+      "category": "rite"
+    },
+    {
+      "key": "corruption_brink",
+      "title": "On the Brink",
+      "description": "Let your corruption (glom) climb to 90.",
+      "glyph": "☠",
+      "points": 20,
+      "rarity": "uncommon",
+      "category": "peril"
+    },
+    {
+      "key": "into_the_deep",
+      "title": "Into the Deep",
+      "description": "Descend to the deepest section.",
+      "glyph": "∇",
+      "points": 30,
+      "rarity": "rare",
+      "category": "descent"
+    },
+    {
+      "key": "heart_found",
+      "title": "The Heart of si'lar",
+      "description": "Stand upon the heart of the sleeper.",
+      "glyph": "♥",
+      "points": 25,
+      "rarity": "uncommon",
+      "category": "descent"
+    },
+    {
+      "key": "three_sigils",
+      "title": "All Three Lit",
+      "description": "Hold all three sigils lit at once.",
+      "glyph": "⚛",
+      "points": 35,
+      "rarity": "rare",
+      "category": "rite"
+    },
+    {
+      "key": "warden_folded",
+      "title": "The Warden Folded",
+      "description": "Unmake the warden that guards the heart.",
+      "glyph": "⚔",
+      "points": 50,
+      "rarity": "rare",
+      "category": "combat"
+    },
+    {
+      "key": "ascended",
+      "title": "ugnaken",
+      "description": "Wake si'larbentethegn. End the dream.",
+      "glyph": "👁",
+      "points": 100,
+      "rarity": "legendary",
+      "category": "rite"
+    },
+    {
+      "key": "whisper_heard",
+      "title": "A Thought Not Yet Thought",
+      "description": "Hear a whisper of the deeper truth.",
+      "glyph": "✴",
+      "points": 15,
+      "rarity": "uncommon",
+      "category": "secret",
+      "hidden": true
+    },
+    {
+      "key": "word_breaks",
+      "title": "The Word Breaks",
+      "description": "Utter the Word with the sigils spent.",
+      "glyph": "❁",
+      "points": 15,
+      "rarity": "uncommon",
+      "category": "secret",
+      "hidden": true
+    }
+  ]
+}

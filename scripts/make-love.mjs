@@ -15,7 +15,10 @@ if (!srcDir || !outFile) {
   process.exit(1);
 }
 
-const EXCLUDE = [/^\.git(\/|$)/, /^\.claude(\/|$)/, /(^|\/)\.DS_Store$/];
+// A .love is itself a zip — a nested .zip checked into a game repo is never
+// game code LÖVE reads, just dead weight in the web download (squidlite ships
+// a 1.8 MB release archive at its root). Drop any .zip anywhere in the tree.
+const EXCLUDE = [/^\.git(\/|$)/, /^\.claude(\/|$)/, /(^|\/)\.DS_Store$/, /\.zip$/i];
 
 function walk(dir, base = dir) {
   const out = [];

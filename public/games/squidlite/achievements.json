@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "achievements": [
+    { "key": "first_blood", "title": "First Ink", "description": "Defeat your first creature.", "glyph": "🩸", "points": 10, "rarity": "common", "category": "combat" },
+    { "key": "kills_100", "title": "Swarm Sweeper", "description": "Defeat 100 creatures (lifetime).", "glyph": "🦐", "points": 10, "rarity": "common", "category": "combat" },
+    { "key": "kills_500", "title": "Trench Cleaner", "description": "Defeat 500 creatures (lifetime).", "glyph": "🧹", "points": 20, "rarity": "uncommon", "category": "combat" },
+    { "key": "kills_1000", "title": "Ink Demon", "description": "Defeat 1,000 creatures (lifetime). Unlocks the Ink Demon skin.", "glyph": "😈", "points": 40, "rarity": "rare", "category": "combat" },
+    { "key": "kills_5000", "title": "Abyssal Annihilator", "description": "Defeat 5,000 creatures (lifetime).", "glyph": "🦑", "points": 75, "rarity": "legendary", "category": "combat" },
+    { "key": "combo_50", "title": "Frenzy", "description": "Reach a 50 combo. Unlocks the Crimson Wake.", "glyph": "🔥", "points": 20, "rarity": "uncommon", "category": "combat" },
+    { "key": "combo_100", "title": "Maelstrom", "description": "Reach a 100 combo.", "glyph": "🌀", "points": 40, "rarity": "rare", "category": "combat" },
+
+    { "key": "beat_game", "title": "Liberator", "description": "WIN — slay the Eldritch Squid and free the trapped squids. Unlocks Leviathan.", "glyph": "🗽", "points": 30, "rarity": "uncommon", "category": "story" },
+    { "key": "wins_5", "title": "Veteran Diver", "description": "Win 5 runs. Unlocks the Mustache.", "glyph": "🤿", "points": 20, "rarity": "uncommon", "category": "mastery" },
+    { "key": "wins_10", "title": "Trench Lord", "description": "Win 10 runs. Unlocks the Golden Mustache.", "glyph": "👑", "points": 40, "rarity": "rare", "category": "mastery" },
+    { "key": "wins_25", "title": "Trench Sovereign", "description": "Win 25 runs. Unlocks the Diamond Mustache.", "glyph": "💠", "points": 75, "rarity": "legendary", "category": "mastery" },
+    { "key": "wins_50", "title": "Trench Eternal", "description": "Win 50 runs.", "glyph": "♾️", "points": 100, "rarity": "legendary", "category": "mastery" },
+
+    { "key": "depth_4", "title": "The Midnight Drop", "description": "Reach depth 4 — face the Warden.", "glyph": "🌑", "points": 10, "rarity": "common", "category": "depths" },
+    { "key": "depth_8", "title": "Slayer of the Maw", "description": "Reach the Maw at depth 8. Unlocks Voidborn.", "glyph": "🐋", "points": 40, "rarity": "rare", "category": "depths" },
+    { "key": "reach_hadal", "title": "Below the Maw", "description": "Pass the Maw into the Hadal Depths (depth 9). Unlocks Voidkin.", "glyph": "🕳️", "points": 40, "rarity": "rare", "category": "depths" },
+    { "key": "depth_11", "title": "The Hollow Throne", "description": "Reach depth 11, the deepest dark. Unlocks Obsidian.", "glyph": "🪑", "points": 75, "rarity": "legendary", "category": "depths" },
+
+    { "key": "boss_first", "title": "Giant Slayer", "description": "Defeat any boss creature. Unlocks the Pirate Hat.", "glyph": "⚔️", "points": 10, "rarity": "common", "category": "bosses" },
+    { "key": "bosses_8", "title": "Boss Breaker", "description": "Defeat 8 bosses (lifetime). Unlocks the Fancy Top Hat.", "glyph": "🎩", "points": 20, "rarity": "uncommon", "category": "bosses" },
+    { "key": "bosses_25", "title": "Titanbane", "description": "Defeat 25 bosses (lifetime). Unlocks the Specter skin.", "glyph": "👻", "points": 40, "rarity": "rare", "category": "bosses" },
+    { "key": "bosses_50", "title": "Worldender", "description": "Defeat 50 bosses (lifetime).", "glyph": "☠️", "points": 75, "rarity": "legendary", "category": "bosses" },
+
+    { "key": "flawless", "title": "Untouched", "description": "Win a run without taking a single hit.", "glyph": "🛡️", "points": 40, "rarity": "rare", "category": "challenge" },
+    { "key": "curse_win", "title": "Greed Rewarded", "description": "Win with a net point-loss modifier. Unlocks Gilded.", "glyph": "🪙", "points": 20, "rarity": "uncommon", "category": "challenge" },
+    { "key": "speedrun", "title": "Comet Descent", "description": "Win in under 9 minutes. Unlocks Comet.", "glyph": "☄️", "points": 40, "rarity": "rare", "category": "challenge" },
+    { "key": "speedrun_6", "title": "Lightspeed Descent", "description": "Win in under 6 minutes.", "glyph": "⚡", "points": 75, "rarity": "legendary", "category": "challenge" },
+    { "key": "mods_3", "title": "Thrill Seeker", "description": "Win with 3+ modifiers active. Unlocks War Paint.", "glyph": "🎢", "points": 20, "rarity": "uncommon", "category": "challenge" },
+    { "key": "mods_5", "title": "Chaos Theory", "description": "Win with 5+ modifiers active.", "glyph": "🎲", "points": 40, "rarity": "rare", "category": "challenge" },
+    { "key": "terror_win", "title": "Hell Survivor", "description": "Win a run on TERROR difficulty. Unlocks the Halo.", "glyph": "😇", "points": 75, "rarity": "legendary", "category": "challenge" },
+    { "key": "flawless_terror", "title": "Immaculate", "description": "Win on TERROR without taking a single hit.", "glyph": "✨", "points": 100, "rarity": "legendary", "category": "challenge" },
+    { "key": "no_lifesteal_win", "title": "No Crutch", "description": "Win a run (not GOO-GOO BABY) without ever taking Lifesteal.", "glyph": "🚫", "points": 40, "rarity": "rare", "category": "challenge" },
+
+    { "key": "rich_5000", "title": "Trench Tycoon", "description": "Earn 5,000 $Things total. Unlocks the Trench Crown.", "glyph": "💰", "points": 20, "rarity": "uncommon", "category": "economy" },
+    { "key": "rich_25000", "title": "Trench Croesus", "description": "Earn 25,000 $Things total.", "glyph": "💎", "points": 40, "rarity": "rare", "category": "economy" },
+
+    { "key": "playtime_5h", "title": "Tideworn", "description": "Play for 5 hours.", "glyph": "⏳", "points": 20, "rarity": "uncommon", "category": "dedication" },
+    { "key": "deaths_50", "title": "Unsinkable", "description": "Die 50 times and keep diving.", "glyph": "🪦", "points": 20, "rarity": "uncommon", "category": "dedication" },
+
+    { "key": "churgly_slain", "title": "Godkiller", "description": "Slay the Churgly'nth in the fractalspace. Unlocks 3 cosmic relics.", "glyph": "🌌", "points": 100, "rarity": "legendary", "category": "secret", "hidden": true }
+  ]
+}

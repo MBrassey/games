@@ -69,6 +69,60 @@ export function lovePath(slug: string): string {
 // new entries here to keep "latest at the top-left."
 export const GAMES: GameEntry[] = [
   {
+    slug: "silarbentethegn",
+    title: "si'larbentethegn",
+    codename: "SI'LAR.RITE",
+    tagline: "wake the folded god. read the rite in runes you were never meant to know.",
+    description:
+      "A deliberately obscure eldritch roguelite played entirely in an invented alien script — no English verbs, stats, or places, only runes you decipher a little at a time through the in-game codex. You are bul'narth, a flaw the sleeping god dreamed into being by accident, sent to pick its own seal open from within. Descend the shifting karth on typed commands in the eldritch tongue, light the three sigils at the morr / qhel / zyth shrines, unmake the warden at the heart, and utter the Word until the sleeper wakes. The dream rearranges itself every run and forgets you the instant you die.",
+    author: "ThePearlKing",
+    version: "head",
+    category: "rpg",
+    tags: ["roguelite", "eldritch", "cipher", "cryptic"],
+    year: 2026,
+    repo: "ThePearlKing/silarbentethegn",
+    ref: "main",
+    // conf.lua sets t.identity = "complicated_game" (the game's former
+    // name) — NOT the slug default "silarbentethegn". Must be explicit or
+    // the save / achievements bridge writes to the wrong love dir.
+    identity: "complicated_game",
+    accentColor: "#66eb80",
+    multiplayer: "single",
+    status: "live",
+    // Typed-command game (eldritch tongue) plus clickable map / stats /
+    // codex tabs. No joystick; raw browser touches already reach the tabs.
+    // Real play needs a keyboard — tabs are tappable but commands are typed.
+    controls: { mode: "tap" },
+  },
+  {
+    slug: "squidlite",
+    title: "Squidlite",
+    codename: "SQUID.LITE",
+    tagline: "the sea drank the light. ink the dark. take back the trench.",
+    description:
+      "A bioluminescent deep-sea roguelite shooter and spiritual successor to Claude: Mythos. You are the last lit squid; the Maw woke beneath the Hadal Trench and swallowed the glow reef by reef until only your ink remained. Jet on propulsion, hold-fire ink into the dark, dash through the drift, and descend eight depths against escalating creatures. Bank wins, spend $Things at the kraken's Trench Shop, customize your squid with skins and accessories, and pick a live-synthesized procedural soundtrack for the dive.",
+    author: "ThePearlKing",
+    version: "head",
+    category: "action",
+    tags: ["roguelite", "shooter", "deep-sea", "bioluminescent"],
+    year: 2026,
+    repo: "ThePearlKing/squidlite",
+    ref: "main",
+    identity: "squidlite",            // matches the game's conf.lua t.identity
+    accentColor: "#66ccff",
+    multiplayer: "single",
+    status: "live",
+    // WASD jet movement + mouse aim / hold-to-ink. Mirror the Mythos
+    // control shape: movement joystick with Space / Shift bound to dash.
+    controls: {
+      mode: "movement",
+      actions: [
+        { code: "Space",     label: "✦" },
+        { code: "ShiftLeft", label: "⇧" },
+      ],
+    },
+  },
+  {
     slug: "bad-apple",
     title: "Bad Apple // Beat Dash",
     codename: "BAD.APPLE",
