@@ -35,6 +35,8 @@ jobs:
           - ThePearlKing/claude-mythos-game
           - MBrassey/zmine
           - MBrassey/bad-apple
+          - ThePearlKing/silarbentethegn
+          - ThePearlKing/squidlite
         branch:
           - main
     permissions:
